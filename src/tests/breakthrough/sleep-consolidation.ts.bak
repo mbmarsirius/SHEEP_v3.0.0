@@ -1,0 +1,439 @@
+/**
+ * BREAKTHROUGH TEST 2: SLEEP Consolidation
+ * 
+ * Hypothesis: The SLEEP consolidation process improves memory quality by:
+ * 1. Merging redundant facts
+ * 2. Discovering patterns
+ * 3. Identifying outdated information
+ * 4. Creating connections between memories
+ * 
+ * Test Design:
+ * - Create memories with intentional redundancy and patterns
+ * - Run SLEEP consolidation
+ * - Verify consolidation happened correctly
+ */
+
+import { runLLMSleepConsolidation, type SleepConsolidationResult } from "../../consolidation/llm-sleep.js";
+import { createSheepLLMProvider } from "../../extraction/llm-extractor.js";
+import type { Fact, Episode, CausalLink } from "../../memory/schema.js";
+import { generateId, now } from "../../memory/schema.js";
+
+// =============================================================================
+// TEST DATA - Intentionally redundant and patterned
+// =============================================================================
+
+/**
+ * Create redundant facts that SHOULD be consolidated
+ */
+function createRedundantFacts(): Fact[] {
+	const ts = now();
+	return [
+		// Redundant: Same info, different wording
+		{
+			id: generateId("fact"),
+			subject: "user",
+			predicate: "prefers",
+			object: "dark mode",
+			confidence: 0.9,
+			evidence: ["ep1"],
+			isActive: true,
+			userAffirmed: false,
+			accessCount: 5,
+			firstSeen: ts,
+			lastConfirmed: ts,
+			contradictions: [],
+			createdAt: ts,
+			updatedAt: ts,
+		},
+		{
+			id: generateId("fact"),
+			subject: "user",
+			predicate: "likes",
+			object: "dark themes",
+			confidence: 0.85,
+			evidence: ["ep2"],
+			isActive: true,
+			userAffirmed: false,
+			accessCount: 3,
+			firstSeen: ts,
+			lastConfirmed: ts,
+			contradictions: [],
+			createdAt: ts,
+			updatedAt: ts,
+		},
+		{
+			id: generateId("fact"),
+			subject: "user",
+			predicate: "uses",
+			object: "dark mode everywhere",
+			confidence: 0.8,
+			evidence: ["ep3"],
+			isActive: true,
+			userAffirmed: false,
+			accessCount: 2,
+			firstSeen: ts,
+			lastConfirmed: ts,
+			contradictions: [],
+			createdAt: ts,
+			updatedAt: ts,
+		},
+		// Redundant: Work info
+		{
+			id: generateId("fact"),
+			subject: "user",
+			predicate: "works_at",
+			object: "TechCorp",
+			confidence: 0.95,
+			evidence: ["ep1"],
+			isActive: true,
+			userAffirmed: true,
+			accessCount: 10,
+			firstSeen: ts,
+			lastConfirmed: ts,
+			contradictions: [],
+			createdAt: ts,
+			updatedAt: ts,
+		},
+		{
+			id: generateId("fact"),
+			subject: "user",
+			predicate: "employed_by",
+			object: "TechCorp Inc",
+			confidence: 0.8,
+			evidence: ["ep4"],
+			isActive: true,
+			userAffirmed: false,
+			accessCount: 2,
+			firstSeen: ts,
+			lastConfirmed: ts,
+			contradictions: [],
+			createdAt: ts,
+			updatedAt: ts,
+		},
+		// Pattern: Likes Python ecosystem
+		{
+			id: generateId("fact"),
+			subject: "user",
+			predicate: "uses",
+			object: "Python",
+			confidence: 0.9,
+			evidence: ["ep1"],
+			isActive: true,
+			userAffirmed: false,
+			accessCount: 8,
+			firstSeen: ts,
+			lastConfirmed: ts,
+			contradictions: [],
+			createdAt: ts,
+			updatedAt: ts,
+		},
+		{
+			id: generateId("fact"),
+			subject: "user",
+			predicate: "uses",
+			object: "FastAPI",
+			confidence: 0.85,
+			evidence: ["ep2"],
+			isActive: true,
+			userAffirmed: false,
+			accessCount: 5,
+			firstSeen: ts,
+			lastConfirmed: ts,
+			contradictions: [],
+			createdAt: ts,
+			updatedAt: ts,
+		},
+		{
+			id: generateId("fact"),
+			subject: "user",
+			predicate: "uses",
+			object: "pytest",
+			confidence: 0.8,
+			evidence: ["ep3"],
+			isActive: true,
+			userAffirmed: false,
+			accessCount: 4,
+			firstSeen: ts,
+			lastConfirmed: ts,
+			contradictions: [],
+			createdAt: ts,
+			updatedAt: ts,
+		},
+		// Low value fact
+		{
+			id: generateId("fact"),
+			subject: "user",
+			predicate: "asked_about",
+			object: "weather",
+			confidence: 0.5,
+			evidence: ["ep99"],
+			isActive: true,
+			userAffirmed: false,
+			accessCount: 1,
+			firstSeen: ts,
+			lastConfirmed: ts,
+			contradictions: [],
+			createdAt: ts,
+			updatedAt: ts,
+		},
+	];
+}
+
+/**
+ * Create episodes with patterns
+ */
+function createTestEpisodes(): Episode[] {
+	const ts = now();
+	return [
+		{
+			id: generateId("ep"),
+			sourceSessionId: "session1",
+			summary: "User discussed their dark mode preferences and Python development setup",
+			topic: "preferences",
+			keywords: ["dark mode", "Python", "development"],
+			participants: ["user", "assistant"],
+			emotionalSalience: 0.5,
+			factIds: [],
+			causalLinkIds: [],
+			startTime: ts,
+			endTime: ts,
+			createdAt: ts,
+			updatedAt: ts,
+		},
+		{
+			id: generateId("ep"),
+			sourceSessionId: "session2",
+			summary: "User asked about FastAPI best practices for their TechCorp project",
+			topic: "technical",
+			keywords: ["FastAPI", "TechCorp", "best practices"],
+			participants: ["user", "assistant"],
+			emotionalSalience: 0.6,
+			factIds: [],
+			causalLinkIds: [],
+			startTime: ts,
+			endTime: ts,
+			createdAt: ts,
+			updatedAt: ts,
+		},
+		{
+			id: generateId("ep"),
+			sourceSessionId: "session3",
+			summary: "User mentioned preferring dark themes for better focus while coding",
+			topic: "preferences",
+			keywords: ["dark themes", "focus", "coding"],
+			participants: ["user", "assistant"],
+			emotionalSalience: 0.4,
+			factIds: [],
+			causalLinkIds: [],
+			startTime: ts,
+			endTime: ts,
+			createdAt: ts,
+			updatedAt: ts,
+		},
+	];
+}
+
+// =============================================================================
+// TEST RUNNER
+// =============================================================================
+
+export type SleepTestResult = {
+	beforeConsolidation: {
+		factCount: number;
+		episodeCount: number;
+		redundancyScore: number; // How much redundancy exists
+	};
+	afterConsolidation: SleepConsolidationResult;
+	improvements: {
+		factsConsolidated: number;
+		patternsDiscovered: number;
+		connectionsCreated: number;
+		forgettingRecommended: number;
+	};
+	verdict: "IMPROVED" | "NO_CHANGE" | "DEGRADED";
+};
+
+/**
+ * Run SLEEP consolidation test
+ */
+export async function runSleepConsolidationTest(options?: {
+	verbose?: boolean;
+}): Promise<SleepTestResult> {
+	const llm = await createSheepLLMProvider("reasoning", { reasoningModel: "claude-opus-4-5" });
+	
+	// Create test data
+	const facts = createRedundantFacts();
+	const episodes = createTestEpisodes();
+	const causalLinks: CausalLink[] = [];
+	
+	if (options?.verbose) {
+		console.log("\n=== BEFORE CONSOLIDATION ===");
+		console.log(`Facts: ${facts.length}`);
+		for (const f of facts) {
+			console.log(`  ${f.subject} | ${f.predicate} | ${f.object}`);
+		}
+		console.log(`Episodes: ${episodes.length}`);
+	}
+	
+	// Calculate initial redundancy (simple heuristic: facts with similar subjects/predicates)
+	let redundancyScore = 0;
+	for (let i = 0; i < facts.length; i++) {
+		for (let j = i + 1; j < facts.length; j++) {
+			const f1 = facts[i];
+			const f2 = facts[j];
+			if (f1.subject === f2.subject) {
+				// Same subject, check if predicates are similar
+				const p1 = f1.predicate.toLowerCase();
+				const p2 = f2.predicate.toLowerCase();
+				if (p1.includes(p2) || p2.includes(p1) || 
+					(p1.includes("prefer") && p2.includes("like")) ||
+					(p1.includes("like") && p2.includes("prefer")) ||
+					(p1.includes("use") && p2.includes("use")) ||
+					(p1.includes("work") && p2.includes("employ"))) {
+					redundancyScore++;
+				}
+			}
+		}
+	}
+	
+	if (options?.verbose) {
+		console.log(`Redundancy score: ${redundancyScore}`);
+	}
+	
+	// Run SLEEP consolidation
+	if (options?.verbose) {
+		console.log("\n=== RUNNING SLEEP CONSOLIDATION ===");
+	}
+	
+	const consolidationResult = await runLLMSleepConsolidation(
+		llm,
+		episodes,
+		facts,
+		causalLinks,
+		{
+			discoverPatterns: true,
+			consolidateFacts: true,
+			findConnections: true,
+			recommendForgetting: true,
+		}
+	);
+	
+	if (options?.verbose) {
+		console.log(`\n=== AFTER CONSOLIDATION ===`);
+		console.log(`Duration: ${consolidationResult.durationMs}ms`);
+		console.log(`\nPatterns discovered: ${consolidationResult.patternsDiscovered.length}`);
+		for (const p of consolidationResult.patternsDiscovered) {
+			console.log(`  - ${p.description} (${p.patternType}, confidence: ${p.confidence})`);
+		}
+		console.log(`\nFacts consolidated: ${consolidationResult.factsConsolidated.length}`);
+		for (const c of consolidationResult.factsConsolidated) {
+			console.log(`  - ${c.originalFactIds.length} facts → "${c.newFact.subject} ${c.newFact.predicate} ${c.newFact.object}"`);
+			console.log(`    Type: ${c.consolidationType}, Reasoning: ${c.reasoning.substring(0, 100)}...`);
+		}
+		console.log(`\nConnections created: ${consolidationResult.connectionsCreated.length}`);
+		for (const conn of consolidationResult.connectionsCreated) {
+			console.log(`  - ${conn.memoryId1} ↔ ${conn.memoryId2} (${conn.connectionType})`);
+		}
+		console.log(`\nForgetting recommendations: ${consolidationResult.forgettingRecommendations.length}`);
+		for (const f of consolidationResult.forgettingRecommendations) {
+			console.log(`  - ${f.memoryId}: ${f.reason} (${f.reasoning.substring(0, 50)}...)`);
+		}
+	}
+	
+	// Calculate improvements
+	const totalActions = 
+		consolidationResult.factsConsolidated.length +
+		consolidationResult.patternsDiscovered.length +
+		consolidationResult.connectionsCreated.length +
+		consolidationResult.forgettingRecommendations.length;
+	
+	const result: SleepTestResult = {
+		beforeConsolidation: {
+			factCount: facts.length,
+			episodeCount: episodes.length,
+			redundancyScore,
+		},
+		afterConsolidation: consolidationResult,
+		improvements: {
+			factsConsolidated: consolidationResult.factsConsolidated.length,
+			patternsDiscovered: consolidationResult.patternsDiscovered.length,
+			connectionsCreated: consolidationResult.connectionsCreated.length,
+			forgettingRecommended: consolidationResult.forgettingRecommendations.length,
+		},
+		verdict: totalActions > 0 ? "IMPROVED" : "NO_CHANGE",
+	};
+	
+	return result;
+}
+
+/**
+ * Format results for display
+ */
+export function formatSleepTestResults(result: SleepTestResult): string {
+	const lines: string[] = [
+		"═══════════════════════════════════════════════════════════════════",
+		"      BREAKTHROUGH TEST 2: SLEEP CONSOLIDATION                     ",
+		"═══════════════════════════════════════════════════════════════════",
+		"",
+		"Question: Does SLEEP consolidation improve memory quality?",
+		"",
+		"BEFORE CONSOLIDATION",
+		"───────────────────────────────────────────────────────────────────",
+		`  Facts: ${result.beforeConsolidation.factCount}`,
+		`  Episodes: ${result.beforeConsolidation.episodeCount}`,
+		`  Redundancy score: ${result.beforeConsolidation.redundancyScore}`,
+		"",
+		"CONSOLIDATION ACTIONS",
+		"───────────────────────────────────────────────────────────────────",
+		`  Patterns discovered: ${result.improvements.patternsDiscovered}`,
+		`  Facts consolidated: ${result.improvements.factsConsolidated}`,
+		`  Connections created: ${result.improvements.connectionsCreated}`,
+		`  Forgetting recommended: ${result.improvements.forgettingRecommended}`,
+		"",
+		"DETAILS",
+		"───────────────────────────────────────────────────────────────────",
+	];
+	
+	if (result.afterConsolidation.patternsDiscovered.length > 0) {
+		lines.push("  Patterns:");
+		for (const p of result.afterConsolidation.patternsDiscovered) {
+			lines.push(`    - ${p.description}`);
+		}
+	}
+	
+	if (result.afterConsolidation.factsConsolidated.length > 0) {
+		lines.push("  Consolidations:");
+		for (const c of result.afterConsolidation.factsConsolidated) {
+			lines.push(`    - ${c.originalFactIds.length} facts → "${c.newFact.subject} ${c.newFact.predicate} ${c.newFact.object}"`);
+		}
+	}
+	
+	lines.push("");
+	lines.push(`Processing time: ${result.afterConsolidation.durationMs}ms`);
+	lines.push("");
+	
+	if (result.verdict === "IMPROVED") {
+		lines.push("VERDICT: ✅ SLEEP CONSOLIDATION IMPROVED MEMORY QUALITY");
+		lines.push("");
+		lines.push("The system:");
+		if (result.improvements.factsConsolidated > 0) {
+			lines.push(`  - Merged ${result.improvements.factsConsolidated} redundant facts`);
+		}
+		if (result.improvements.patternsDiscovered > 0) {
+			lines.push(`  - Discovered ${result.improvements.patternsDiscovered} patterns`);
+		}
+		if (result.improvements.connectionsCreated > 0) {
+			lines.push(`  - Created ${result.improvements.connectionsCreated} connections`);
+		}
+		if (result.improvements.forgettingRecommended > 0) {
+			lines.push(`  - Identified ${result.improvements.forgettingRecommended} facts to forget`);
+		}
+	} else {
+		lines.push("VERDICT: ❌ SLEEP CONSOLIDATION DID NOT IMPROVE MEMORY");
+	}
+	
+	lines.push("");
+	lines.push("═══════════════════════════════════════════════════════════════════");
+	
+	return lines.join("\n");
+}
