@@ -13,7 +13,7 @@
 
 import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { OpenClawConfig } from "../stubs/config.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { buildCausalChain } from "../causal/causal-extractor.js";
 import { getSheepIntegration } from "../integration/moltbot-bridge.js";

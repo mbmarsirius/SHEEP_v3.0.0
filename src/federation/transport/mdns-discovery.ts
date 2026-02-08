@@ -4,7 +4,7 @@
  * Discovers SHEEP agents on the local network using mDNS/Bonjour.
  */
 
-import { createSubsystemLogger, type SubsystemLogger } from "../../../logging/subsystem.js";
+import { createSubsystemLogger, type SubsystemLogger } from "../../stubs/logging.js";
 
 export interface DiscoveredPeer {
   agentId: string;

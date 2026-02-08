@@ -20,7 +20,7 @@
  */
 
 import type { Episode, Fact, CausalLink } from "./schema.js";
-import type { EmbeddingProvider } from "../../memory/embeddings.js";
+import type { EmbeddingProvider } from "../stubs/embeddings.js";
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 

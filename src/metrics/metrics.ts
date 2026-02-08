@@ -10,7 +10,7 @@
  * @module sheep/metrics/metrics
  */
 
-import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { createSubsystemLogger } from "../stubs/logging.js";
 
 const log = createSubsystemLogger("sheep");
 

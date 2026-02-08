@@ -20,8 +20,8 @@
 import type { Request, Response } from "express";
 import express from "express";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
-import { loadConfig } from "../../config/config.js";
-import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { loadConfig } from "../stubs/config.js";
+import { createSubsystemLogger } from "../stubs/logging.js";
 import { createSheepLLMProvider } from "../extraction/llm-extractor.js";
 import { SheepDatabase } from "../memory/database.js";
 

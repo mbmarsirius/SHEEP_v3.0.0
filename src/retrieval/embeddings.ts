@@ -7,11 +7,11 @@
  * @module sheep/retrieval/embeddings
  */
 
-import type { OpenClawConfig } from "../../config/types.js";
-import type { EmbeddingProvider } from "../../memory/embeddings.js";
+import type { OpenClawConfig } from "../stubs/config.js";
+import type { EmbeddingProvider } from "../stubs/embeddings.js";
 import type { SheepDatabase } from "../memory/database.js";
-import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { createEmbeddingProvider } from "../../memory/embeddings.js";
+import { createSubsystemLogger } from "../stubs/logging.js";
+import { createEmbeddingProvider } from "../stubs/embeddings.js";
 
 const log = createSubsystemLogger("sheep");
 

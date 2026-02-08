@@ -11,11 +11,11 @@
  * @module sheep/retrieval/agentic-retrieval
  */
 
-import type { EmbeddingProvider } from "../../memory/embeddings.js";
+import type { EmbeddingProvider } from "../stubs/embeddings.js";
 import type { LLMProvider } from "../extraction/llm-extractor.js";
 import type { SheepDatabase } from "../memory/database.js";
 import type { RetrievalResult } from "./hybrid-retrieval.js";
-import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { createSubsystemLogger } from "../stubs/logging.js";
 import { hybridRetrieve } from "./hybrid-retrieval.js";
 
 const log = createSubsystemLogger("sheep");

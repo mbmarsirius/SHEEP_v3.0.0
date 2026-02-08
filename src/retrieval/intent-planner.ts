@@ -16,7 +16,7 @@
  */
 
 import type { LLMProvider } from "../extraction/llm-extractor.js";
-import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { createSubsystemLogger } from "../stubs/logging.js";
 
 const log = createSubsystemLogger("sheep");
 

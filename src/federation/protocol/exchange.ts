@@ -3,7 +3,7 @@
  */
 
 import { randomUUID } from "crypto";
-import { createSubsystemLogger, type SubsystemLogger } from "../../../logging/subsystem.js";
+import { createSubsystemLogger, type SubsystemLogger } from "../../stubs/logging.js";
 import { MoltbookDiscovery } from "../moltbook/discovery.js";
 import { ReputationSystem } from "../moltbook/reputation.js";
 import { TemplateAnonymizer } from "../privacy/anonymizer.js";

@@ -5,7 +5,7 @@
  */
 
 import { WebSocket, WebSocketServer } from "ws";
-import { createSubsystemLogger, type SubsystemLogger } from "../../../logging/subsystem.js";
+import { createSubsystemLogger, type SubsystemLogger } from "../../stubs/logging.js";
 import { FederationMessage } from "../protocol/messages.js";
 
 export interface P2PTransportConfig {

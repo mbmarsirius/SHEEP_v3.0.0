@@ -4,7 +4,7 @@
  * Uses Moltbook posts/comments/DMs as the transport mechanism for federation messages.
  */
 
-import { createSubsystemLogger, type SubsystemLogger } from "../../../logging/subsystem.js";
+import { createSubsystemLogger, type SubsystemLogger } from "../../stubs/logging.js";
 import { MoltbookClient } from "../moltbook/client.js";
 import { FederationMessage } from "../protocol/messages.js";
 

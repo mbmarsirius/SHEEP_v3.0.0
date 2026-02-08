@@ -13,7 +13,7 @@
  */
 
 import type { Fact } from "../memory/schema.js";
-import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { createSubsystemLogger } from "../stubs/logging.js";
 
 const log = createSubsystemLogger("sheep");
 

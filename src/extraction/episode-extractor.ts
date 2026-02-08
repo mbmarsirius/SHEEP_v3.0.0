@@ -11,7 +11,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { Episode } from "../memory/schema.js";
-import { resolveSessionTranscriptsDirForAgent } from "../../config/sessions/paths.js";
+import { resolveSessionTranscriptsDirForAgent } from "../stubs/session-paths.js";
 import { generateId, now } from "../memory/schema.js";
 
 // =============================================================================

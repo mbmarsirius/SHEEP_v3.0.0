@@ -7,11 +7,11 @@
  * @module sheep/integration/moltbot-bridge
  */
 
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { OpenClawConfig } from "../stubs/config.js";
 import type { LLMProvider, SheepModelConfig } from "../extraction/llm-extractor.js";
 import type { Episode, Fact, CausalLink } from "../memory/schema.js";
 import { retryAsync } from "../../infra/retry.js";
-import { createEmbeddingProvider, type EmbeddingProvider } from "../../memory/embeddings.js";
+import { createEmbeddingProvider, type EmbeddingProvider } from "../stubs/embeddings.js";
 import {
   extractFactsWithLLM,
   extractCausalLinksWithLLM,

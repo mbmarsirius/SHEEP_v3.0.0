@@ -8,11 +8,11 @@
  * @module sheep/extraction/online-synthesis
  */
 
-import type { EmbeddingProvider } from "../../memory/embeddings.js";
+import type { EmbeddingProvider } from "../stubs/embeddings.js";
 import type { SheepDatabase } from "../memory/database.js";
 import type { Fact } from "../memory/schema.js";
 import type { LLMProvider } from "./llm-extractor.js";
-import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { createSubsystemLogger } from "../stubs/logging.js";
 import { cosineSimilarity } from "../memory/semantic-search.js";
 import { generateFactEmbedding } from "../retrieval/embeddings.js";
 

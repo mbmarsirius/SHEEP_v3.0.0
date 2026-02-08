@@ -14,12 +14,12 @@
  * @module sheep/retrieval/hybrid-retrieval
  */
 
-import type { EmbeddingProvider } from "../../memory/embeddings.js";
+import type { EmbeddingProvider } from "../stubs/embeddings.js";
 import type { LLMProvider } from "../extraction/llm-extractor.js";
 import type { SheepDatabase } from "../memory/database.js";
 import type { Fact } from "../memory/schema.js";
 import type { RetrievalPlan, MetadataFilters } from "./intent-planner.js";
-import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { createSubsystemLogger } from "../stubs/logging.js";
 import { bm25Search, type BM25SearchResult } from "./bm25-search.js";
 import { planRetrieval } from "./intent-planner.js";
 import { metadataSearch as enhancedMetadataSearch } from "./metadata-search.js";

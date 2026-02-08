@@ -10,8 +10,8 @@
  * @module sheep/consolidation/scheduler
  */
 
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { createSubsystemLogger } from "../../logging/subsystem.js";
+import type { OpenClawConfig } from "../stubs/config.js";
+import { createSubsystemLogger } from "../stubs/logging.js";
 import { getIdleAgents } from "../integration/moltbot-bridge.js";
 import { runConsolidation, type ConsolidationResult } from "./consolidator.js";
 

@@ -6,7 +6,7 @@
 
 import type { Request, Response, NextFunction } from "express";
 import type { AuthenticatedRequest } from "./auth.js";
-import { createSubsystemLogger, type SubsystemLogger } from "../../../logging/subsystem.js";
+import { createSubsystemLogger, type SubsystemLogger } from "../../stubs/logging.js";
 
 const logger = createSubsystemLogger("API");
 

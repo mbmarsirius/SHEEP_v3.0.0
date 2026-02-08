@@ -23,8 +23,8 @@ import type {
   Relationship,
   CoreMemory,
 } from "./schema.js";
-import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { requireNodeSqlite } from "../../memory/sqlite.js";
+import { createSubsystemLogger } from "../stubs/logging.js";
+import { requireNodeSqlite } from "../stubs/sqlite.js";
 import { generateId, now } from "./schema.js";
 
 const log = createSubsystemLogger("sheep");
@@ -638,7 +638,7 @@ CREATE INDEX IF NOT EXISTS idx_sheep_core_memories_importance_category ON sheep_
       Fact,
       "id" | "createdAt" | "updatedAt" | "accessCount" | "isActive" | "contradictions"
     >,
-    embeddingProvider: import("../../memory/embeddings.js").EmbeddingProvider,
+    embeddingProvider: import("../stubs/embeddings.js").EmbeddingProvider,
     llm?: import("../extraction/llm-extractor.js").LLMProvider,
     synthesisOptions?: import("../extraction/online-synthesis.js").SynthesisOptions,
   ): Promise<{

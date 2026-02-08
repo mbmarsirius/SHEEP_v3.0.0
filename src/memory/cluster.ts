@@ -12,7 +12,7 @@
  */
 
 import { Type, type Static } from "@sinclair/typebox";
-import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { createSubsystemLogger } from "../stubs/logging.js";
 import { generateId, now } from "./schema.js";
 import { cosineSimilarity } from "./semantic-search.js";
 

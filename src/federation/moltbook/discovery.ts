@@ -4,7 +4,7 @@
  * Finds and tracks other SHEEP-enabled agents using Moltbook as the registry.
  */
 
-import { createSubsystemLogger, type SubsystemLogger } from "../../../logging/subsystem.js";
+import { createSubsystemLogger, type SubsystemLogger } from "../../stubs/logging.js";
 import { MoltbookClient, MoltbookAgent, MoltbookPost } from "./client.js";
 
 // ============ TYPES ============
