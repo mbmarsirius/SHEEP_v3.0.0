@@ -60,6 +60,8 @@ export type ConsolidationOptions = {
   useLLMExtraction?: boolean;
   /** Use LLM for contradiction resolution (default: true when LLM available) */
   useLLMContradictionResolution?: boolean;
+  /** Enable LLM-powered sleep consolidation (default: true - THE REAL SHEEP) */
+  enableLLMSleep?: boolean;
   /** Maximum number of episodes to process per run (default: unlimited) */
   maxEpisodesPerRun?: number;
 };
@@ -99,15 +101,32 @@ export async function runConsolidation(
   const processedFrom = options.since ?? lastRun?.processedTo ?? new Date(0).toISOString();
   const processedTo = new Date().toISOString();
 
-  // Initialize LLM provider for enhanced extraction (Task 1 + Task 2 fix)
+  // AUTONOMOUS MODE: Initialize LLM provider with auto-retry and graceful fallback
   // Default to true for LLM extraction - this is what makes SHEEP powerful
   let llm: LLMProvider | null = null;
   if (options.useLLMExtraction !== false) {
-    try {
-      llm = await createSheepLLMProvider("extraction");
-      log.info("LLM extraction enabled for consolidation", { provider: llm.name });
-    } catch (err) {
-      log.warn("LLM extraction unavailable, using basic extraction only", { error: String(err) });
+    // Auto-retry LLM initialization (max 3 attempts)
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        llm = await createSheepLLMProvider("extraction");
+        log.info("LLM extraction enabled for consolidation", { provider: llm.name, attempt: attempt + 1 });
+        break; // Success, exit retry loop
+      } catch (err) {
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        if (attempt < 2) {
+          const delay = Math.min(1000 * Math.pow(2, attempt), 5000); // 1s, 2s, 4s
+          log.warn("LLM initialization failed, retrying...", {
+            attempt: attempt + 1,
+            delayMs: delay,
+            error: errorMsg.slice(0, 100),
+          });
+          await new Promise((resolve) => setTimeout(resolve, delay));
+        } else {
+          log.warn("LLM extraction unavailable after retries, using basic extraction only", {
+            error: errorMsg.slice(0, 100),
+          });
+        }
+      }
     }
   }
 
@@ -398,6 +417,190 @@ export async function runConsolidation(
       log.info("Skipping causal link extraction (LLM not available)");
     }
 
+    // Stage 2.7: FORESIGHT EXTRACTION (predict future behavior/events)
+    if (!options.dryRun && storedEpisodes.length > 0 && llm) {
+      try {
+        const { extractForesightsFromEpisodes } = await import("../extraction/foresight-extractor.js");
+        options.onProgress?.("Extracting foresights", 0, storedEpisodes.length);
+
+        const foresightCandidates = await extractForesightsFromEpisodes(
+          llm,
+          storedEpisodes.map((e) => ({ id: e.id, summary: e.summary, timestamp: e.timestamp })),
+        );
+
+        for (const foresight of foresightCandidates) {
+          try {
+            db.insertForesight({
+              description: foresight.description,
+              evidence: foresight.evidence,
+              startTime: foresight.startTime,
+              endTime: foresight.endTime ?? null,
+              durationDays: foresight.durationDays ?? null,
+              confidence: foresight.confidence,
+              sourceEpisodeId: foresight.sourceEpisodeId,
+              userId: "user",
+            });
+          } catch {
+            // Ignore duplicate foresight errors
+          }
+        }
+
+        log.info("Foresight extraction completed", { count: foresightCandidates.length });
+      } catch (err) {
+        log.warn("Foresight extraction failed, continuing", { error: String(err).slice(0, 100) });
+      }
+    }
+
+    // Stage 2.8: PROFILE DISCRIMINATION (stable vs transient traits)
+    if (!options.dryRun && stats.factsExtracted > 0) {
+      try {
+        const { buildDynamicProfile } = await import("../extraction/profile-discriminator.js");
+        options.onProgress?.("Building user profile", 0, 1);
+
+        const allFacts = db.findFacts({ activeOnly: true });
+        const profile = buildDynamicProfile(allFacts);
+
+        // Store profile
+        try {
+          db.insertUserProfile({
+            userId: "user",
+            attributes: JSON.stringify(profile),
+            confidence: 0.8,
+          });
+        } catch {
+          // May already exist, update instead
+          try {
+            db.updateUserProfile("user", {
+              attributes: JSON.stringify(profile),
+              confidence: 0.8,
+            });
+          } catch {
+            // Ignore profile storage errors
+          }
+        }
+
+        log.info("Profile discrimination completed", {
+          stableTraits: profile.stableTraits?.length ?? 0,
+          transientStates: profile.transientStates?.length ?? 0,
+        });
+      } catch (err) {
+        log.warn("Profile discrimination failed, continuing", { error: String(err).slice(0, 100) });
+      }
+    }
+
+    // Stage 2.9: LLM-POWERED SLEEP CONSOLIDATION (THE REAL SHEEP BREAKTHROUGH)
+    // AUTONOMOUS MODE: Auto-retry with graceful fallback - never fail the whole consolidation
+    // This is what makes SHEEP truly "cognitive" - pattern discovery, fact consolidation,
+    // connection finding, and intelligent forgetting recommendations
+    if (!options.dryRun && llm && options.enableLLMSleep !== false) {
+      options.onProgress?.("LLM sleep consolidation", 0, 1);
+      
+      // Auto-retry sleep consolidation (max 2 attempts)
+      let sleepSuccess = false;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          // Get recent memories for sleep consolidation
+          const recentEpisodes = db.queryEpisodes({ limit: 100 });
+          const recentFacts = db.findFacts({ activeOnly: true, limit: 200 });
+          const recentCausalLinks = db.queryCausalLinks({ limit: 100 });
+
+          if (recentEpisodes.length > 0 || recentFacts.length > 0 || recentCausalLinks.length > 0) {
+            if (attempt === 0) {
+              log.info("Running LLM sleep consolidation", {
+                episodes: recentEpisodes.length,
+                facts: recentFacts.length,
+                causalLinks: recentCausalLinks.length,
+              });
+            } else {
+              log.info("Retrying LLM sleep consolidation", { attempt: attempt + 1 });
+            }
+
+            const { runLLMSleepConsolidation } = await import("./llm-sleep.js");
+            const sleepResult = await runLLMSleepConsolidation(
+              llm,
+              recentEpisodes,
+              recentFacts,
+              recentCausalLinks,
+              {
+                discoverPatterns: true,
+                consolidateFacts: true,
+                findConnections: true,
+                recommendForgetting: true,
+              },
+            );
+
+            log.info("LLM sleep consolidation completed", {
+              patternsDiscovered: sleepResult.patternsDiscovered.length,
+              factsConsolidated: sleepResult.factsConsolidated.length,
+              connectionsCreated: sleepResult.connectionsCreated.length,
+              forgettingRecommendations: sleepResult.forgettingRecommendations.length,
+              contradictionsResolved: sleepResult.contradictionsResolved.length,
+              durationMs: sleepResult.durationMs,
+            });
+
+            // Apply forgetting recommendations (with error handling)
+            if (sleepResult.forgettingRecommendations.length > 0) {
+              for (const rec of sleepResult.forgettingRecommendations) {
+                try {
+                  if (rec.memoryType === "episode") {
+                    // Demote episode (mark as low priority)
+                    const episode = recentEpisodes.find((e) => e.id === rec.memoryId);
+                    if (episode) {
+                      db.updateEpisode(episode.id, { utilityScore: Math.max(0, episode.utilityScore - 0.3) });
+                    }
+                  } else if (rec.memoryType === "fact") {
+                    // Retract fact
+                    const fact = recentFacts.find((f) => f.id === rec.memoryId);
+                    if (fact) {
+                      db.retractFact(fact.id, `LLM sleep: ${rec.reason}`);
+                      stats.memoriesPruned++;
+                    }
+                  }
+                } catch (recErr) {
+                  log.warn("Failed to apply forgetting recommendation", {
+                    memoryId: rec.memoryId,
+                    error: String(recErr).slice(0, 100),
+                  });
+                  // Continue with other recommendations
+                }
+              }
+            }
+
+            sleepSuccess = true;
+            break; // Success, exit retry loop
+          } else {
+            log.info("Skipping LLM sleep consolidation (no recent memories)");
+            sleepSuccess = true; // Not an error, just nothing to process
+            break;
+          }
+        } catch (err) {
+          const errorMsg = err instanceof Error ? err.message : String(err);
+          if (attempt < 1) {
+            const delay = Math.min(2000 * Math.pow(2, attempt), 10000); // 2s, 4s
+            log.warn("LLM sleep consolidation failed, retrying...", {
+              attempt: attempt + 1,
+              delayMs: delay,
+              error: errorMsg.slice(0, 100),
+            });
+            await new Promise((resolve) => setTimeout(resolve, delay));
+          } else {
+            log.warn("LLM sleep consolidation failed after retries, continuing without it", {
+              error: errorMsg.slice(0, 100),
+            });
+            // Don't throw - graceful degradation, continue with rest of consolidation
+          }
+        }
+      }
+
+      if (!sleepSuccess) {
+        log.info("LLM sleep consolidation skipped (failed after retries)");
+      }
+    } else if (!llm && !options.dryRun) {
+      log.info("Skipping LLM sleep consolidation (LLM not available)");
+    } else if (options.enableLLMSleep === false) {
+      log.info("LLM sleep consolidation disabled by config");
+    }
+
     // Stage 3: Run active forgetting (prune/demote low-retention memories)
     if (!options.dryRun) {
       options.onProgress?.("Active forgetting", 0, 1);
@@ -405,7 +608,7 @@ export async function runConsolidation(
         minRetentionScore: options.minRetentionScore ?? 0.2,
         dryRun: false,
       });
-      stats.memoriesPruned = forgettingResult.episodesPruned + forgettingResult.factsDemoted;
+      stats.memoriesPruned += forgettingResult.episodesPruned + forgettingResult.factsDemoted;
     }
 
     // Stage 4: Enforce memory limits (handle growth gracefully)

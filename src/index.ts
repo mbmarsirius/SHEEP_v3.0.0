@@ -34,5 +34,8 @@ export * from "./integration/index.js";
 // Tools module - agent tools
 export * from "./tools/index.js";
 
+// Privacy module - GDPR/HIPAA compliance (OPEN SOURCE)
+export * from "./privacy/index.js";
+
 // CLI module - command line interface
 // export * from "./cli/index.js";

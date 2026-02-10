@@ -8,3 +8,4 @@
 
 export * from "./health-check.js";
 export * from "./cleanup.js";
+export * from "./auto-recovery.js";

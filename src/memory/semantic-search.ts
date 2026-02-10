@@ -400,7 +400,16 @@ export class SemanticMemoryIndex {
   async search(query: string, config: SemanticSearchConfig = {}): Promise<SemanticSearchResult[]> {
     const { minSimilarity = 0.3, maxResults = 10, types } = config;
 
-    const queryEmbedding = await this.getEmbedding(query);
+    let queryEmbedding: number[];
+    try {
+      queryEmbedding = await this.getEmbedding(query);
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      // If embedding fails (e.g., 500 error), return empty results
+      // This allows the system to fall back to keyword search
+      console.warn(`[SHEEP] Query embedding failed: ${errorMsg.slice(0, 100)}`);
+      return [];
+    }
 
     // Calculate similarities
     const results: SemanticSearchResult[] = [];
@@ -408,6 +417,11 @@ export class SemanticMemoryIndex {
     for (const memory of this.memories) {
       // Filter by type if specified
       if (types && !types.includes(memory.type)) {
+        continue;
+      }
+
+      // Skip if query embedding is all zeros (fallback from error)
+      if (queryEmbedding.every((v) => v === 0)) {
         continue;
       }
 
@@ -488,24 +502,110 @@ export class SemanticMemoryIndex {
 
   /**
    * Get embedding for a single text
+   * AUTONOMOUS MODE: Auto-retry on failures with exponential backoff
    */
   private async getEmbedding(text: string): Promise<number[]> {
     if (!this.embeddingProvider) {
       // Return a random embedding for testing (384 dimensions like MiniLM)
       return Array.from({ length: 384 }, () => Math.random() * 2 - 1);
     }
-    return this.embeddingProvider.embedQuery(text);
+
+    // Auto-retry with exponential backoff (max 3 attempts)
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        return await this.embeddingProvider.embedQuery(text);
+      } catch (err) {
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        const isTokenLimit = errorMsg.includes("500") || errorMsg.includes("token") || errorMsg.includes("limit");
+        
+        // If it's a token limit error and not the last attempt, retry with delay
+        if (isTokenLimit && attempt < 2) {
+          const delay = Math.min(1000 * Math.pow(2, attempt), 5000); // 1s, 2s, 4s
+          console.warn(`[SHEEP] Embedding query failed (attempt ${attempt + 1}/3), retrying in ${delay}ms...`);
+          await new Promise((resolve) => setTimeout(resolve, delay));
+          continue;
+        }
+        
+        // If not retryable or last attempt, log and return zero vector
+        console.warn(`[SHEEP] Embedding generation failed for query: ${errorMsg.slice(0, 100)}`);
+        // Return a zero vector as fallback (will result in low similarity scores)
+        // Dimension should match the embedding model (typically 1536 for text-embedding-3-small)
+        return new Array(1536).fill(0);
+      }
+    }
+
+    // Should never reach here, but return zero vector as final fallback
+    return new Array(1536).fill(0);
   }
 
   /**
    * Get embeddings for multiple texts (batch)
+   * AUTONOMOUS MODE: Auto-retry with smaller batches on failures
    */
   private async getBatchEmbeddings(texts: string[]): Promise<number[][]> {
     if (!this.embeddingProvider) {
       // Return random embeddings for testing
       return texts.map(() => Array.from({ length: 384 }, () => Math.random() * 2 - 1));
     }
-    return this.embeddingProvider.embedBatch(texts);
+
+    // Auto-retry with exponential backoff (max 3 attempts)
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        return await this.embeddingProvider.embedBatch(texts);
+      } catch (err) {
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        const isTokenLimit = errorMsg.includes("500") || errorMsg.includes("token") || errorMsg.includes("limit");
+        
+        // If it's a token limit error and not the last attempt, try smaller batches
+        if (isTokenLimit && attempt < 2) {
+          const delay = Math.min(1000 * Math.pow(2, attempt), 5000); // 1s, 2s, 4s
+          console.warn(`[SHEEP] Batch embedding failed (${texts.length} texts, attempt ${attempt + 1}/3), retrying with smaller batches in ${delay}ms...`);
+          await new Promise((resolve) => setTimeout(resolve, delay));
+          
+          // Fallback: process with smaller batches
+          const results: number[][] = [];
+          const smallBatchSize = Math.max(4, Math.floor(texts.length / (attempt + 2))); // Progressively smaller
+          
+          for (let i = 0; i < texts.length; i += smallBatchSize) {
+            const smallBatch = texts.slice(i, i + smallBatchSize);
+            try {
+              const batchResults = await this.embeddingProvider.embedBatch(smallBatch);
+              results.push(...batchResults);
+            } catch (smallErr) {
+              // If even small batch fails, use zero vectors
+              console.warn(`[SHEEP] Small batch embedding also failed: ${String(smallErr).slice(0, 100)}`);
+              const zeroVector = new Array(1536).fill(0);
+              results.push(...smallBatch.map(() => zeroVector));
+            }
+          }
+          
+          return results;
+        }
+        
+        // If not retryable or last attempt, fallback to smaller batches
+        console.warn(`[SHEEP] Batch embedding failed (${texts.length} texts): ${errorMsg.slice(0, 100)}`);
+        break; // Exit retry loop and use fallback below
+      }
+    }
+    
+    // Final fallback: process with very small batches (4 items)
+    const results: number[][] = [];
+    const smallBatchSize = 4;
+    
+    for (let i = 0; i < texts.length; i += smallBatchSize) {
+      const smallBatch = texts.slice(i, i + smallBatchSize);
+      try {
+        const batchResults = await this.embeddingProvider.embedBatch(smallBatch);
+        results.push(...batchResults);
+      } catch (smallErr) {
+        // If even small batch fails, use zero vectors
+        console.warn(`[SHEEP] Small batch embedding failed: ${String(smallErr).slice(0, 100)}`);
+        const zeroVector = new Array(1536).fill(0);
+        results.push(...smallBatch.map(() => zeroVector));
+      }
+    }
+    
+    return results;
   }
 }
 
@@ -790,10 +890,27 @@ export async function performHybridSearch(
   const { bm25Weight = 0.4, vectorWeight = 0.6, minScore = 0.2, maxResults = 10, types } = config;
 
   // Perform both searches in parallel
-  const [bm25Results, vectorResults] = await Promise.all([
-    bm25Index.search(query, { maxResults: maxResults * 2, types }),
-    semanticIndex.search(query, { maxResults: maxResults * 2, types, minSimilarity: 0.1 }),
-  ]);
+  // If semantic search fails (e.g., embedding 500 error), fall back to BM25 only
+  let bm25Results: SemanticSearchResult[];
+  let vectorResults: SemanticSearchResult[];
+
+  try {
+    [bm25Results, vectorResults] = await Promise.all([
+      bm25Index.search(query, { maxResults: maxResults * 2, types }),
+      semanticIndex.search(query, { maxResults: maxResults * 2, types, minSimilarity: 0.1 }).catch((err) => {
+        // If semantic search fails (embedding error), return empty results
+        // BM25 will still work, so we get keyword-based results
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        console.warn(`[SHEEP] Semantic search failed in hybrid search: ${errorMsg.slice(0, 100)}`);
+        return [];
+      }),
+    ]);
+  } catch (err) {
+    // If both fail, return empty results
+    const errorMsg = err instanceof Error ? err.message : String(err);
+    console.warn(`[SHEEP] Hybrid search failed: ${errorMsg.slice(0, 100)}`);
+    return [];
+  }
 
   // Combine results using reciprocal rank fusion (RRF)
   // RRF is more robust than simple weighted averaging

@@ -12,6 +12,7 @@ import type { EmbeddingProvider } from "../stubs/embeddings.js";
 import type { SheepDatabase } from "../memory/database.js";
 import { createSubsystemLogger } from "../stubs/logging.js";
 import { createEmbeddingProvider } from "../stubs/embeddings.js";
+import { recoverEmbeddingEngine, recordError, recordSuccess } from "../health/auto-recovery.js";
 
 const log = createSubsystemLogger("sheep");
 
@@ -85,7 +86,9 @@ export async function generateFactEmbeddings(
   provider: EmbeddingProvider,
   options: EmbeddingGenerationOptions = {},
 ): Promise<{ processed: number; generated: number; errors: number }> {
-  const batchSize = options.batchSize ?? 32;
+  // Reduced batch size to avoid token limit errors (500 error)
+  // 32 was too large - try 16, fallback to 8 if still fails
+  const batchSize = options.batchSize ?? 16;
   const maxFacts = options.maxFacts ?? Infinity;
 
   // Get facts without embeddings
@@ -136,6 +139,10 @@ export async function generateFactEmbeddings(
   `);
 
   // Process in batches
+  // AUTONOMOUS MODE: Use auto-recovery for embedding generation
+  // Note: agentId might not be directly accessible from db, so we'll use a generic identifier
+  const agentId = "sheep-embeddings"; // Generic identifier for embedding generation health tracking
+  
   for (let i = 0; i < totalFacts; i += batchSize) {
     const batch = factsWithoutEmbeddings.slice(i, i + batchSize);
 
@@ -143,8 +150,51 @@ export async function generateFactEmbeddings(
     const texts = batch.map((fact) => `${fact.subject} ${fact.predicate} ${fact.object}`);
 
     try {
-      // Generate embeddings in batch
-      const embeddings = await provider.embedBatch(texts);
+      // Generate embeddings in batch with auto-recovery
+      let embeddings: number[][];
+      
+      const success = await recoverEmbeddingEngine(
+        agentId,
+        async () => {
+          embeddings = await provider.embedBatch(texts);
+        },
+        3, // max retries
+      );
+
+      if (!success) {
+        // If auto-recovery failed, try smaller batches manually
+        const errorMsg = "Auto-recovery failed, trying smaller batches";
+        log.warn("Batch embedding failed, trying smaller batches", {
+          originalBatchSize: batch.length,
+          error: errorMsg,
+        });
+        
+        // Process in smaller batches (8 items at a time)
+        embeddings = [];
+        const smallBatchSize = 8;
+        for (let k = 0; k < texts.length; k += smallBatchSize) {
+          const smallBatch = texts.slice(k, k + smallBatchSize);
+          try {
+            const smallEmbeddings = await provider.embedBatch(smallBatch);
+            embeddings.push(...smallEmbeddings);
+            if (agentId) recordSuccess(agentId);
+          } catch (smallErr) {
+            // If even small batch fails, skip this batch
+            const errorMsg = smallErr instanceof Error ? smallErr.message : String(smallErr);
+            log.warn("Small batch embedding also failed, skipping", {
+              smallBatchSize: smallBatch.length,
+              error: errorMsg.slice(0, 100),
+            });
+            if (agentId) recordError(agentId, `Small batch embedding failed: ${errorMsg.slice(0, 100)}`);
+            // Add empty embeddings to maintain array length
+            embeddings.push(...smallBatch.map(() => []));
+            errors += smallBatch.length;
+          }
+        }
+      } else {
+        // Success - record it
+        if (agentId) recordSuccess(agentId);
+      }
 
       // Store embeddings in a transaction for this batch
       db.db.exec("BEGIN TRANSACTION");
@@ -192,13 +242,17 @@ export async function generateFactEmbeddings(
         });
       }
     } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : String(err);
       log.error("Batch embedding generation failed", {
         batchStart: i,
         batchSize: batch.length,
-        error: String(err),
+        error: errorMsg.slice(0, 200),
       });
       errors += batch.length;
       processed += batch.length;
+      
+      // Don't throw - continue with next batch
+      // This allows embedding generation to continue even if some batches fail
     }
   }
 

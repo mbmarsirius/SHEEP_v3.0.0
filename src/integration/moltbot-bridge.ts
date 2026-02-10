@@ -10,7 +10,23 @@
 import type { OpenClawConfig } from "../stubs/config.js";
 import type { LLMProvider, SheepModelConfig } from "../extraction/llm-extractor.js";
 import type { Episode, Fact, CausalLink } from "../memory/schema.js";
-import { retryAsync } from "../../infra/retry.js";
+/** Simple retry utility (standalone, no ../../infra dependency) */
+async function retryAsync<T>(
+  fn: () => Promise<T>,
+  opts: { retries?: number; delay?: number; label?: string } = {},
+): Promise<T> {
+  const { retries = 3, delay = 1000, label = "operation" } = opts;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      if (attempt === retries) throw err;
+      console.warn(`[SHEEP] ${label} failed (attempt ${attempt + 1}/${retries + 1}), retrying in ${delay}ms...`);
+      await new Promise((r) => setTimeout(r, delay * Math.pow(2, attempt)));
+    }
+  }
+  throw new Error(`${label} failed after ${retries + 1} attempts`);
+}
 import { createEmbeddingProvider, type EmbeddingProvider } from "../stubs/embeddings.js";
 import {
   extractFactsWithLLM,
@@ -29,6 +45,7 @@ import {
   type PrefetchTimingBreakdown,
 } from "../metrics/metrics.js";
 import { analyzePrefetchNeeds, shouldPrefetch } from "../prefetch/prefetch-engine.js";
+import { recordHeartbeat, checkHealth, recordSuccess, recordError } from "../health/auto-recovery.js";
 
 // Simple console logger
 const log = {
@@ -63,12 +80,24 @@ export type SheepIntegrationConfig = {
 };
 
 /**
+ * Foresight type for predictive recall (Step 3: EverMemOS-inspired)
+ */
+export type ForesightSummary = {
+  id: string;
+  description: string;
+  evidence: string;
+  confidence: number;
+};
+
+/**
  * Result from prefetching memories
  */
 export type PrefetchedMemories = {
   facts: Fact[];
   episodes: Episode[];
   causalLinks: CausalLink[];
+  /** Step 3: Active foresights (predictions/intentions) for predictive recall */
+  foresights?: ForesightSummary[];
   skipped: boolean;
   skipReason?: string;
   durationMs: number;
@@ -190,9 +219,27 @@ export class SheepIntegration {
     // Load existing memories into index
     await this.loadMemoriesIntoIndex();
 
+    // AUTONOMOUS MODE: "Wake up" - Load recent memories to establish continuity
+    // This gives SHEEP a sense of "remembering" across sessions
+    try {
+      const recentEpisodes = this.db.queryEpisodes({ limit: 10 });
+      const recentFacts = this.db.findFacts({ activeOnly: true, limit: 20 });
+      const stats = this.db.getMemoryStats();
+      
+      log.info("SHEEP waking up - loaded recent memories", {
+        episodes: recentEpisodes.length,
+        facts: recentFacts.length,
+        totalFacts: stats.totalFacts,
+        totalEpisodes: stats.totalEpisodes,
+        totalCausalLinks: stats.totalCausalLinks,
+      });
+    } catch (err) {
+      log.warn("Failed to load wake-up memories", { error: String(err) });
+    }
+
     this.initialized = true;
     this.initPromise = null;
-    log.info("SHEEP integration ready");
+    log.info("SHEEP integration ready - cognitive memory active");
   }
 
   /**
@@ -240,6 +287,9 @@ export class SheepIntegration {
    * Prefetch relevant memories for a user message
    */
   async prefetchMemories(userMessage: string): Promise<PrefetchedMemories> {
+    // Record heartbeat for connection monitoring
+    recordHeartbeat(this.config.agentId);
+    
     const totalStart = Date.now();
     const timing: Partial<PrefetchTimingBreakdown> = {};
 
@@ -282,25 +332,102 @@ export class SheepIntegration {
     // Entity extraction is included in analyzePrefetchNeeds
     timing.entityExtractionMs = 0;
 
-    // Time database queries
+    // Time retrieval - USE HYBRID SEARCH (Step 2: Breakthrough improvement)
+    // Replaces entity-only lookup with BM25 + vector for better recall
     const dbStart = Date.now();
     let facts: Fact[] = [];
     let episodes: Episode[] = [];
-    const causalLinks: CausalLink[] = [];
+    let causalLinks: CausalLink[] = [];
 
-    // Get facts for mentioned entities
-    for (const entity of prediction.intent.entities) {
-      facts.push(...this.db.findFacts({ subject: entity }));
-      facts.push(...this.db.findFacts({ object: entity }));
+    // Primary: hybrid search using user message as query
+    try {
+      const searchResults = await performHybridSearch(
+        userMessage,
+        this.bm25Index,
+        this.semanticIndex,
+        {
+          bm25Weight: 0.4,
+          vectorWeight: 0.6,
+          minScore: 0.2,
+          maxResults: 20,
+          types: ["fact", "episode", "causal_link"],
+        },
+      );
+
+      const seenFactIds = new Set<string>();
+      const seenEpisodeIds = new Set<string>();
+      const seenCausalIds = new Set<string>();
+
+      for (const result of searchResults) {
+        if (result.type === "fact") {
+          const fact = this.db.getFact(result.id);
+          if (fact && !seenFactIds.has(fact.id)) {
+            facts.push(fact);
+            seenFactIds.add(fact.id);
+          }
+        } else if (result.type === "episode") {
+          const episode = this.db.getEpisode(result.id);
+          if (episode && !seenEpisodeIds.has(episode.id)) {
+            episodes.push(episode);
+            seenEpisodeIds.add(episode.id);
+          }
+        } else if (result.type === "causal_link") {
+          const link = this.db.findCausalLinks({}).find((l) => l.id === result.id);
+          if (link && !seenCausalIds.has(link.id)) {
+            causalLinks.push(link);
+            seenCausalIds.add(link.id);
+          }
+        }
+      }
+    } catch (err) {
+      log.warn("Hybrid prefetch failed, falling back to entity lookup", { error: String(err) });
     }
 
-    // Get recent episodes
-    episodes = this.db.queryEpisodes({ limit: 5 });
+    // Fallback: entity-based lookup when hybrid returns few results
+    if (facts.length < 3 && prediction.intent.entities.length > 0) {
+      for (const entity of prediction.intent.entities) {
+        facts.push(...this.db.findFacts({ subject: entity }));
+        facts.push(...this.db.findFacts({ object: entity }));
+      }
+    }
+    if (episodes.length < 2) {
+      episodes = this.db.queryEpisodes({ limit: 5 });
+    }
+
+    // Step 4: Scene-level retrieval - when query suggests "what happened during X"
+    const sceneIndicators =
+      /\b(trip|travel|vacation|project|meeting|during|when we|what happened|conversation about)\b/i;
+    if (sceneIndicators.test(userMessage) && episodes.length < 8) {
+      const queryTerms = userMessage
+        .toLowerCase()
+        .replace(/[^\w\s]/g, " ")
+        .split(/\s+/)
+        .filter((t) => t.length > 2);
+      const allEpisodes = this.db.queryEpisodes({ limit: 50 });
+      const sceneEpisodes = allEpisodes.filter((ep) => {
+        const topicLower = ep.topic.toLowerCase();
+        const summaryLower = ep.summary.toLowerCase();
+        return queryTerms.some((term) => topicLower.includes(term) || summaryLower.includes(term));
+      });
+      const seenIds = new Set(episodes.map((e) => e.id));
+      for (const ep of sceneEpisodes) {
+        if (!seenIds.has(ep.id)) {
+          episodes.push(ep);
+          seenIds.add(ep.id);
+        }
+      }
+      episodes = episodes.slice(0, 8);
+    }
+
+    // Step 3: Wire foresights into retrieval - predictive recall for "what will happen"
+    const foresights = this.db.getActiveForesights("user").slice(0, 5);
+
     timing.dbQueryMs = Date.now() - dbStart;
 
-    // Deduplicate
-    facts = [...new Map(facts.map((f) => [f.id, f])).values()];
-    episodes = [...new Map(episodes.map((e) => [e.id, e])).values()];
+    // Deduplicate and limit
+    facts = [...new Map(facts.map((f) => [f.id, f])).values()].slice(0, 15);
+    episodes = [...new Map(episodes.map((e) => [e.id, e])).values()].slice(0, 8);
+    causalLinks = causalLinks.slice(0, 5);
 
     timing.totalMs = Date.now() - totalStart;
     timing.metLatencyTarget = timing.totalMs < 100;
@@ -322,6 +449,12 @@ export class SheepIntegration {
       facts,
       episodes,
       causalLinks,
+      foresights: foresights.map((f) => ({
+        id: f.id,
+        description: f.description,
+        evidence: f.evidence,
+        confidence: f.confidence,
+      })),
       skipped: false,
       durationMs: timing.totalMs,
     };
@@ -331,7 +464,14 @@ export class SheepIntegration {
    * Format prefetched memories for injection into a prompt
    */
   formatMemoryContext(memories: PrefetchedMemories): MemoryContext {
-    if (memories.skipped || (memories.facts.length === 0 && memories.episodes.length === 0)) {
+    const hasContent =
+      !memories.skipped &&
+      (memories.facts.length > 0 ||
+        memories.episodes.length > 0 ||
+        (memories.foresights?.length ?? 0) > 0 ||
+        memories.causalLinks.length > 0);
+
+    if (!hasContent) {
       return {
         systemPromptAddition: "",
         memoryCount: 0,
@@ -358,9 +498,29 @@ export class SheepIntegration {
       }
     }
 
+    if (memories.causalLinks.length > 0) {
+      types.push("causal");
+      lines.push("\n### Causal Context:");
+      for (const cl of memories.causalLinks.slice(0, 3)) {
+        lines.push(`- ${cl.causeDescription} → ${cl.effectDescription} (${cl.mechanism})`);
+      }
+    }
+
+    if (memories.foresights && memories.foresights.length > 0) {
+      types.push("foresights");
+      lines.push("\n### Upcoming/Planned:");
+      for (const f of memories.foresights.slice(0, 3)) {
+        lines.push(`- ${f.description} (${(f.confidence * 100).toFixed(0)}% confidence)`);
+      }
+    }
+
     return {
       systemPromptAddition: lines.join("\n"),
-      memoryCount: memories.facts.length + memories.episodes.length,
+      memoryCount:
+        memories.facts.length +
+        memories.episodes.length +
+        memories.causalLinks.length +
+        (memories.foresights?.length ?? 0),
       memoryTypes: types,
     };
   }
@@ -402,34 +562,54 @@ export class SheepIntegration {
 
     let searchResults;
 
-    if (useHybrid) {
-      // Use hybrid search combining BM25 keyword matching and vector similarity
-      // α parameter controls the balance: α=BM25 weight, (1-α)=vector weight
-      searchResults = await performHybridSearch(query, this.bm25Index, this.semanticIndex, {
-        bm25Weight: alpha,
-        vectorWeight: 1 - alpha,
-        minScore: minSimilarity,
-        maxResults: limit * 2, // Get more to allow for deduplication
-        types,
-      });
+    try {
+      if (useHybrid) {
+        // Use hybrid search combining BM25 keyword matching and vector similarity
+        // α parameter controls the balance: α=BM25 weight, (1-α)=vector weight
+        searchResults = await performHybridSearch(query, this.bm25Index, this.semanticIndex, {
+          bm25Weight: alpha,
+          vectorWeight: 1 - alpha,
+          minScore: minSimilarity,
+          maxResults: limit * 2, // Get more to allow for deduplication
+          types,
+        });
 
-      log.info("Hybrid search completed", {
-        query: query.slice(0, 50),
-        resultsCount: searchResults.length,
-        alpha,
-      });
-    } else {
-      // Fall back to pure semantic search
-      searchResults = await this.semanticIndex.search(query, {
-        maxResults: limit,
-        minSimilarity,
-        types,
-      });
+        log.info("Hybrid search completed", {
+          query: query.slice(0, 50),
+          resultsCount: searchResults.length,
+          alpha,
+        });
+      } else {
+        // Fall back to pure semantic search
+        searchResults = await this.semanticIndex.search(query, {
+          maxResults: limit,
+          minSimilarity,
+          types,
+        });
 
-      log.info("Semantic search completed", {
-        query: query.slice(0, 50),
-        resultsCount: searchResults.length,
-      });
+        log.info("Semantic search completed", {
+          query: query.slice(0, 50),
+          resultsCount: searchResults.length,
+        });
+      }
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      
+      // If embedding/search fails (e.g., 500 error), fall back to keyword search
+      if (
+        errorMsg.includes("500") ||
+        errorMsg.includes("embedding") ||
+        errorMsg.includes("token") ||
+        errorMsg.includes("limit")
+      ) {
+        log.warn("Semantic search failed (embedding error), falling back to keyword search", {
+          error: errorMsg.slice(0, 100),
+        });
+        return this.keywordFallbackSearch(query, types, limit);
+      }
+      
+      // Re-throw other errors
+      throw err;
     }
 
     // Group results by type and fetch full records
@@ -776,6 +956,20 @@ export class SheepIntegration {
       );
     };
 
+    // Helper to check if error is HTTP 400 (Bad Request) - don't retry these
+    const isBadRequestError = (err: unknown): boolean => {
+      const message = err instanceof Error ? err.message : String(err);
+      return (
+        message.includes("400") ||
+        message.includes("bad_request") ||
+        message.includes("Bad Request") ||
+        message.includes("HTTP 400") ||
+        message.toLowerCase().includes("invalid api key") ||
+        message.toLowerCase().includes("invalid model") ||
+        message.toLowerCase().includes("model not found")
+      );
+    };
+
     // Helper to extract retry-after delay from error message
     const getRetryAfterMs = (err: unknown): number | undefined => {
       const message = err instanceof Error ? err.message : String(err);
@@ -793,8 +987,14 @@ export class SheepIntegration {
       return undefined;
     };
 
+    // Record heartbeat and check health
+    recordHeartbeat(this.config.agentId);
+    const healthStatus = checkHealth(this.config.agentId, this.db);
+
+    // AUTONOMOUS MODE: Robust error handling - never fail learning completely
     try {
       // Create episode using LLM summarization with retry logic
+      // Increased retry attempts for autonomous mode
       const summary = await retryAsync(() => summarizeEpisodeWithLLM(llm, conversationText), {
         attempts: 3,
         minDelayMs: 2000, // Start with 2 seconds
@@ -809,7 +1009,34 @@ export class SheepIntegration {
             label: "episode summary",
           });
         },
-      }).catch(() => null); // Fallback to null if all retries fail
+      }).catch((err) => {
+        // AUTONOMOUS MODE: Graceful degradation - never crash learning
+        // Don't retry HTTP 400 errors - they're configuration issues
+        if (isBadRequestError(err)) {
+          const errorMsg = err instanceof Error ? err.message : String(err);
+          log.error("SHEEP learning failed: HTTP 400 (Bad Request)", {
+            error: errorMsg.slice(0, 200),
+            hint: "Check OpenRouter API key and model configuration",
+          });
+          // Return basic summary instead of null - graceful degradation
+          return {
+            summary: conversationText.slice(0, 200) + "...",
+            topic: "general",
+            keywords: [],
+            salience: 0.5,
+          };
+        }
+        // For other errors, return basic summary - continue learning
+        log.warn("SHEEP episode summarization failed, using basic summary", {
+          error: String(err).slice(0, 100),
+        });
+        return {
+          summary: conversationText.slice(0, 200) + "...",
+          topic: "general",
+          keywords: [],
+          salience: 0.5,
+        };
+      });
 
       const episodeId = generateId("ep");
       const timestamp = now();
@@ -857,11 +1084,17 @@ export class SheepIntegration {
         this.db.insertFact(fact);
       }
 
+      // Record success for health monitoring
+      if (extractedFacts.length > 0) {
+        recordSuccess(this.config.agentId);
+      }
+
       // Extract causal links using real LLM with retry logic
+      // AUTONOMOUS MODE: Increased attempts for better causal reasoning
       const extractedLinks = await retryAsync(
         () => extractCausalLinksWithLLM(llm, conversationText, episodeId),
         {
-          attempts: 3,
+          attempts: 5, // Increased from 3 for autonomous mode - extract more causal links
           minDelayMs: 2000,
           maxDelayMs: 60_000,
           jitter: 0.1,
@@ -875,10 +1108,22 @@ export class SheepIntegration {
             });
           },
         },
-      ).catch(() => []); // Fallback to empty array if all retries fail
+      ).catch((err) => {
+        // Record error for health monitoring
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        if (!isBadRequestError(err)) {
+          recordError(this.config.agentId, `Causal link extraction failed: ${errorMsg.slice(0, 100)}`);
+        }
+        return []; // Fallback to empty array if all retries fail
+      });
 
       for (const link of extractedLinks) {
         this.db.insertCausalLink(link);
+      }
+
+      // Record success for health monitoring
+      if (extractedLinks.length > 0) {
+        recordSuccess(this.config.agentId);
       }
 
       // Add to semantic index
@@ -977,7 +1222,7 @@ export function getSheepIntegration(agentId: string, config: OpenClawConfig): Sh
       agentId,
       config,
       enableSemanticSearch: true,
-      enableLLMSleep: false,
+      enableLLMSleep: true, // AUTONOMOUS MODE: Enable real LLM sleep consolidation
     });
     integrationCache.set(agentId, integration);
   }
@@ -1003,9 +1248,42 @@ export async function prefetchMemoriesForMessage(
     };
   }
 
-  const integration = getSheepIntegration(agentId, config);
-  const memories = await integration.prefetchMemories(userMessage);
-  return integration.formatMemoryContext(memories);
+  try {
+    const integration = getSheepIntegration(agentId, config);
+    const memories = await integration.prefetchMemories(userMessage);
+    return integration.formatMemoryContext(memories);
+  } catch (err) {
+    const errorMsg = err instanceof Error ? err.message : String(err);
+    
+    // HTTP 400 errors are configuration issues - fail gracefully
+    if (
+      errorMsg.includes("400") ||
+      errorMsg.includes("bad_request") ||
+      errorMsg.includes("Bad Request") ||
+      errorMsg.includes("HTTP 400") ||
+      errorMsg.toLowerCase().includes("invalid api key") ||
+      errorMsg.toLowerCase().includes("invalid model")
+    ) {
+      log.error("SHEEP prefetch failed: HTTP 400 (Bad Request)", {
+        error: errorMsg.slice(0, 200),
+        hint: "Check OpenRouter API key and model configuration. SHEEP will continue without memory context.",
+      });
+      // Return empty context instead of crashing - allows conversation to continue
+      return {
+        systemPromptAddition: "",
+        memoryCount: 0,
+        memoryTypes: [],
+      };
+    }
+    
+    // For other errors, log and return empty context
+    log.warn("SHEEP prefetch failed", { error: errorMsg.slice(0, 200) });
+    return {
+      systemPromptAddition: "",
+      memoryCount: 0,
+      memoryTypes: [],
+    };
+  }
 }
 
 // =============================================================================
@@ -1018,11 +1296,12 @@ export async function prefetchMemoriesForMessage(
 const lastActivityTimestamps = new Map<string, number>();
 
 /**
- * Minimum time between learning runs to avoid excessive processing (5 minutes)
+ * Minimum time between learning runs to avoid excessive processing
+ * COST OPTIMIZATION: Increased to 30 minutes to reduce API costs
+ * Each learning call makes 3 LLM requests (summary + facts + causal links)
+ * Changed from 2 minutes to 30 minutes to reduce costs (€141 OpenRouter bill)
  */
-// Increased to 15 minutes to avoid hitting API rate limits
-// Each learning call makes 3 LLM requests (summary + facts + causal links)
-const MIN_LEARNING_INTERVAL_MS = 15 * 60 * 1000;
+const MIN_LEARNING_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes (was 2 minutes)
 
 /**
  * Last learning run timestamp per agent
@@ -1053,12 +1332,16 @@ export async function learnFromAgentTurn(
   // Update activity timestamp
   lastActivityTimestamps.set(agentId, Date.now());
 
-  // Rate limit learning to avoid excessive processing
-  const lastLearning = lastLearningTimestamps.get(agentId) ?? 0;
-  if (Date.now() - lastLearning < MIN_LEARNING_INTERVAL_MS) {
-    log.info("SHEEP learning skipped (rate limited)", { agentId });
-    return;
-  }
+    // COST OPTIMIZATION: Rate limit learning to reduce API costs
+    // Only learn every 30 minutes (was 2 minutes) to reduce OpenRouter bill
+    const lastLearning = lastLearningTimestamps.get(agentId) ?? 0;
+    if (Date.now() - lastLearning < MIN_LEARNING_INTERVAL_MS) {
+      log.info("SHEEP learning skipped (rate limited - cost optimization)", { 
+        agentId,
+        timeSinceLastLearning: Math.round((Date.now() - lastLearning) / 1000 / 60) + " minutes",
+      });
+      return;
+    }
 
   // Only learn if we have meaningful content
   if (!messages || messages.length < 2) {
@@ -1089,6 +1372,24 @@ export async function learnFromAgentTurn(
       })
       .catch((err) => {
         const errorMsg = err instanceof Error ? err.message : String(err);
+        
+        // HTTP 400 errors are configuration issues
+        if (
+          errorMsg.includes("400") ||
+          errorMsg.includes("bad_request") ||
+          errorMsg.includes("Bad Request") ||
+          errorMsg.includes("HTTP 400") ||
+          errorMsg.toLowerCase().includes("invalid api key") ||
+          errorMsg.toLowerCase().includes("invalid model")
+        ) {
+          log.error("SHEEP learning failed: HTTP 400 (Bad Request)", {
+            agentId,
+            error: errorMsg.slice(0, 200),
+            hint: "Check OpenRouter API key and model configuration",
+          });
+          return;
+        }
+        
         // Don't spam logs for rate limit errors - they're expected and handled with retries
         if (
           errorMsg.includes("429") ||
@@ -1097,7 +1398,7 @@ export async function learnFromAgentTurn(
         ) {
           log.info("SHEEP learning skipped due to rate limit", { agentId });
         } else {
-          log.warn("SHEEP learning failed", { agentId, error: errorMsg });
+          log.warn("SHEEP learning failed", { agentId, error: errorMsg.slice(0, 200) });
         }
       });
   } catch (err) {

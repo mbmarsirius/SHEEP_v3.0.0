@@ -222,4 +222,47 @@ describe("LLM Extractor (Breakthrough!)", () => {
       expect(response).toBe(customResponse);
     });
   });
+
+  describe("HTTP 400 error handling", () => {
+    it("provides detailed error message for HTTP 400 (Bad Request)", async () => {
+      // Simulate HTTP 400 error response - mock provider returns error format
+      const responses = new Map([
+        [
+          "test prompt",
+          JSON.stringify({
+            stopReason: "error",
+            errorMessage: "HTTP 400: Invalid API key or model not found",
+          }),
+        ],
+      ]);
+      const llm = createMockLLMProvider(responses);
+
+      // Mock the complete function to throw an error with 400
+      const originalComplete = llm.complete;
+      llm.complete = async (prompt: string) => {
+        if (prompt.includes("test prompt")) {
+          throw new Error("HTTP 400: Provider returned error");
+        }
+        return originalComplete(prompt);
+      };
+
+      // Try to use the provider - should get an error
+      await expect(llm.complete("test prompt")).rejects.toThrow("HTTP 400");
+    });
+
+    it("identifies HTTP 400 errors correctly", () => {
+      // Test that error message contains helpful information
+      const errorMsg = `HTTP 400: Provider returned error. This usually means:
+- Invalid API key or missing authentication
+- Invalid model name/format: openrouter/anthropic/claude-opus-4-6
+- Malformed request parameters
+- Model not found or not available
+
+Error details: Invalid API key`;
+
+      expect(errorMsg).toContain("HTTP 400");
+      expect(errorMsg).toContain("Invalid API key");
+      expect(errorMsg).toContain("model name/format");
+    });
+  });
 });

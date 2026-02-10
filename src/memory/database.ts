@@ -36,6 +36,24 @@ const log = createSubsystemLogger("sheep");
 const SCHEMA_VERSION = 3;
 
 /**
+ * Safe JSON parse helper - handles empty strings, null, and malformed JSON
+ */
+function safeJSONParse<T>(jsonString: string | null | undefined, defaultValue: T): T {
+  if (!jsonString || typeof jsonString !== "string" || jsonString.trim().length === 0) {
+    return defaultValue;
+  }
+
+  try {
+    const parsed = JSON.parse(jsonString);
+    return parsed as T;
+  } catch (err) {
+    // Log error but return default value instead of crashing
+    console.warn(`[SHEEP DB] Failed to parse JSON: ${String(err).slice(0, 100)}. Value: ${jsonString.slice(0, 50)}...`);
+    return defaultValue;
+  }
+}
+
+/**
  * SQL statements to create SHEEP AI tables
  */
 const CREATE_TABLES_SQL = `
@@ -235,6 +253,11 @@ export class SheepDatabase {
       for (const stmt of statements) {
         this.db.exec(stmt);
       }
+
+      // Run all migrations for new databases (CREATE_TABLES_SQL only has base tables)
+      this.applyMigration002();
+      this.applyMigration003();
+
       this.db.prepare("INSERT INTO sheep_schema_version (version) VALUES (?)").run(SCHEMA_VERSION);
     } else {
       // Check for migrations
@@ -548,13 +571,13 @@ CREATE INDEX IF NOT EXISTS idx_sheep_core_memories_importance_category ON sheep_
       id: row.id as string,
       timestamp: row.timestamp as string,
       summary: row.summary as string,
-      participants: JSON.parse(row.participants as string),
+      participants: safeJSONParse(row.participants as string, []),
       topic: row.topic as string,
-      keywords: JSON.parse(row.keywords as string),
+      keywords: safeJSONParse(row.keywords as string, []),
       emotionalSalience: row.emotional_salience as number,
       utilityScore: row.utility_score as number,
       sourceSessionId: row.source_session_id as string,
-      sourceMessageIds: JSON.parse(row.source_message_ids as string),
+      sourceMessageIds: safeJSONParse(row.source_message_ids as string, []),
       ttl: row.ttl as Episode["ttl"],
       accessCount: row.access_count as number,
       lastAccessedAt: (row.last_accessed_at as string) ?? undefined,
@@ -764,10 +787,10 @@ CREATE INDEX IF NOT EXISTS idx_sheep_core_memories_importance_category ON sheep_
       predicate: row.predicate as string,
       object: row.object as string,
       confidence: row.confidence as number,
-      evidence: JSON.parse(row.evidence as string),
+      evidence: safeJSONParse(row.evidence as string, []),
       firstSeen: row.first_seen as string,
       lastConfirmed: row.last_confirmed as string,
-      contradictions: JSON.parse(row.contradictions as string),
+      contradictions: safeJSONParse(row.contradictions as string, []),
       userAffirmed: row.user_affirmed === 1,
       isActive: row.is_active === 1,
       retractedReason: (row.retracted_reason as string) ?? undefined,
@@ -889,7 +912,7 @@ CREATE INDEX IF NOT EXISTS idx_sheep_core_memories_importance_category ON sheep_
       effectDescription: row.effect_description as string,
       mechanism: row.mechanism as string,
       confidence: row.confidence as number,
-      evidence: JSON.parse(row.evidence as string),
+      evidence: safeJSONParse(row.evidence as string, []),
       temporalDelay: (row.temporal_delay as string) ?? undefined,
       causalStrength: row.causal_strength as CausalLink["causalStrength"],
       createdAt: row.created_at as string,
@@ -1005,11 +1028,11 @@ CREATE INDEX IF NOT EXISTS idx_sheep_core_memories_importance_category ON sheep_
       trigger: row.trigger as string,
       action: row.action as string,
       expectedOutcome: (row.expected_outcome as string) ?? undefined,
-      examples: JSON.parse(row.examples as string),
+      examples: safeJSONParse(row.examples as string, []),
       successRate: row.success_rate as number,
       timesUsed: row.times_used as number,
       timesSucceeded: row.times_succeeded as number,
-      tags: JSON.parse(row.tags as string),
+      tags: safeJSONParse(row.tags as string, []),
       createdAt: row.created_at as string,
       updatedAt: row.updated_at as string,
     };
@@ -1164,7 +1187,7 @@ CREATE INDEX IF NOT EXISTS idx_sheep_core_memories_importance_category ON sheep_
         // The "new_value" at that time is what we want
         const historicalValue = retractChanges.new_value as string;
         try {
-          const parsed = JSON.parse(historicalValue);
+          const parsed = safeJSONParse(historicalValue, null);
           if (parsed.object) fact.object = parsed.object;
           if (parsed.confidence) fact.confidence = parsed.confidence;
         } catch {
@@ -1268,7 +1291,7 @@ CREATE INDEX IF NOT EXISTS idx_sheep_core_memories_importance_category ON sheep_
           });
         } else if (change.changeType === "modify") {
           try {
-            const newVal = JSON.parse(change.newValue);
+            const newVal = safeJSONParse(change.newValue, null);
             timeline.push({
               timestamp: change.createdAt,
               factId: fact.id,
@@ -1514,7 +1537,7 @@ CREATE INDEX IF NOT EXISTS idx_sheep_core_memories_importance_category ON sheep_
       memoriesPruned: row.memories_pruned as number,
       durationMs: (row.duration_ms as number) ?? undefined,
       errorMessage: (row.error_message as string) ?? undefined,
-      log: row.log ? JSON.parse(row.log as string) : undefined,
+      log: row.log ? safeJSONParse(row.log as string, undefined) : undefined,
     };
   }
 
@@ -1758,7 +1781,7 @@ CREATE INDEX IF NOT EXISTS idx_sheep_core_memories_importance_category ON sheep_
     return {
       id: row.id as string,
       userId: row.user_id as string,
-      attributes: JSON.parse(row.attributes as string),
+      attributes: safeJSONParse(row.attributes as string, {}),
       confidence: row.confidence as number,
       createdAt: row.created_at as string,
       updatedAt: row.updated_at as string,
@@ -1779,7 +1802,7 @@ CREATE INDEX IF NOT EXISTS idx_sheep_core_memories_importance_category ON sheep_
 
     if (!existing) return;
 
-    const currentAttributes = JSON.parse(existing.attributes as string);
+    const currentAttributes = safeJSONParse(existing.attributes as string, {});
     const updatedAttributes = updates.attributes
       ? { ...currentAttributes, ...updates.attributes }
       : currentAttributes;
@@ -1937,7 +1960,7 @@ CREATE INDEX IF NOT EXISTS idx_sheep_core_memories_importance_category ON sheep_
       person2: row.person2 as string,
       relationshipType: row.relationship_type as string,
       strength: row.strength as number,
-      evidence: JSON.parse(row.evidence as string),
+      evidence: safeJSONParse(row.evidence as string, []),
       createdAt: row.created_at as string,
       updatedAt: row.updated_at as string,
     }));
@@ -1965,7 +1988,7 @@ CREATE INDEX IF NOT EXISTS idx_sheep_core_memories_importance_category ON sheep_
       person2: row.person2 as string,
       relationshipType: row.relationship_type as string,
       strength: row.strength as number,
-      evidence: JSON.parse(row.evidence as string),
+      evidence: safeJSONParse(row.evidence as string, []),
       createdAt: row.created_at as string,
       updatedAt: row.updated_at as string,
     };
@@ -1981,7 +2004,7 @@ CREATE INDEX IF NOT EXISTS idx_sheep_core_memories_importance_category ON sheep_
 
     if (!existing) return;
 
-    const evidence = JSON.parse(existing.evidence) as string[];
+    const evidence = safeJSONParse(existing.evidence, []) as string[];
     if (additionalEvidence && !evidence.includes(additionalEvidence)) {
       evidence.push(additionalEvidence);
     }

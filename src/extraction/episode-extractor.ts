@@ -482,8 +482,10 @@ export function segmentIntoEpisodes(
 ): Omit<Episode, "id" | "createdAt" | "updatedAt" | "accessCount">[] {
   const minMessages = options.minMessagesPerEpisode ?? 2;
   const maxMessages = options.maxMessagesPerEpisode ?? 20;
-  // Semantic density threshold (SimpleMem approach: filter low-density windows)
-  const minDensity = 0.3;
+  // Semantic density threshold -- lowered from 0.3 to 0.1 to avoid
+  // filtering out valid short conversations. Real density gating
+  // happens during consolidation where we have more context.
+  const minDensity = 0.1;
 
   const episodes: Omit<Episode, "id" | "createdAt" | "updatedAt" | "accessCount">[] = [];
   let currentMessages: RawMessage[] = [];
@@ -502,14 +504,13 @@ export function segmentIntoEpisodes(
         const episode = createEpisodeFromMessages(currentMessages, session);
         episodes.push(episode);
       }
-      // Skip low-density windows (they don't contain enough information)
       currentMessages = [];
     }
 
     currentMessages.push(message);
   }
 
-  // Handle remaining messages with density gating
+  // Handle remaining messages
   if (currentMessages.length >= minMessages) {
     const density = calculateSemanticDensity(currentMessages);
     if (density >= minDensity) {
@@ -517,26 +518,27 @@ export function segmentIntoEpisodes(
       episodes.push(episode);
     }
   } else if (currentMessages.length > 0 && episodes.length > 0) {
-    // Merge with last episode if too few messages (but check density)
-    const density = calculateSemanticDensity(currentMessages);
-    if (density >= minDensity) {
-      const lastEpisode = episodes[episodes.length - 1];
-      lastEpisode.sourceMessageIds.push(...currentMessages.map((m) => m.id));
-      // Recalculate scores
-      const allMessages = [
-        ...session.messages.filter((m) => lastEpisode.sourceMessageIds.includes(m.id)),
-        ...currentMessages,
-      ];
-      lastEpisode.emotionalSalience = calculateSalience(allMessages);
-      lastEpisode.utilityScore = calculateUtility(allMessages);
-    }
+    // Merge with last episode if too few messages
+    const lastEpisode = episodes[episodes.length - 1];
+    lastEpisode.sourceMessageIds.push(...currentMessages.map((m) => m.id));
+    // Recalculate scores
+    const allMessages = [
+      ...session.messages.filter((m) => lastEpisode.sourceMessageIds.includes(m.id)),
+      ...currentMessages,
+    ];
+    lastEpisode.emotionalSalience = calculateSalience(allMessages);
+    lastEpisode.utilityScore = calculateUtility(allMessages);
   } else if (currentMessages.length > 0) {
-    // Create episode even with few messages if density is acceptable
-    const density = calculateSemanticDensity(currentMessages);
-    if (density >= minDensity) {
-      const episode = createEpisodeFromMessages(currentMessages, session);
-      episodes.push(episode);
-    }
+    // Create episode even with few messages
+    const episode = createEpisodeFromMessages(currentMessages, session);
+    episodes.push(episode);
+  }
+
+  // Safety net: never drop an entire session. If density gating filtered
+  // everything out but we had enough messages, create one episode from all.
+  if (episodes.length === 0 && session.messages.length >= minMessages) {
+    const episode = createEpisodeFromMessages(session.messages, session);
+    episodes.push(episode);
   }
 
   return episodes;

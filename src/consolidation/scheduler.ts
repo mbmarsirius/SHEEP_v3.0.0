@@ -257,6 +257,7 @@ async function runConsolidationForAgent(
   try {
     const result = await runConsolidation({
       agentId,
+      enableLLMSleep: true, // AUTONOMOUS MODE: Enable real LLM sleep consolidation
       onProgress: (stage, current, total) => {
         log.info(`SHEEP consolidation progress: ${stage}`, { agentId, current, total });
       },

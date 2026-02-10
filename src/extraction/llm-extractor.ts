@@ -47,33 +47,54 @@ export type LLMOptions = {
 };
 
 /**
- * SHEEP model configuration for different task types.
- * With Claude Max Plan, we can prioritize quality over cost.
+ * SHEEP 4-tier model configuration.
+ * 
+ * BRAIN  = Opus 4.6 via Max Plan proxy (deep reasoning, chat, contradictions)
+ * MUSCLE = Sonnet 4 via Max Plan proxy (fact/causal/foresight extraction)
+ * REFLEX = Haiku 4 via Max Plan proxy (summaries, NER, procedures)
+ * LIGHTNING = Gemini 2.5 Flash external (prefetch, classification - offloads proxy)
  */
 export type SheepModelConfig = {
-  /** Fast model for latency-critical operations like prefetch (<100ms target) */
-  fastModel: string;
-  /** Extraction model for fact/causal link extraction (quality over speed) */
-  extractionModel: string;
-  /** Reasoning model for sleep consolidation (complex reasoning needs quality) */
-  reasoningModel: string;
+  /** BRAIN: Deep reasoning - sleep consolidation, chat, contradictions */
+  brainModel: string;
+  /** MUSCLE: Quality extraction - facts, causal links, foresights */
+  muscleModel: string;
+  /** REFLEX: Fast bulk processing - summaries, NER, procedures */
+  reflexModel: string;
+  /** LIGHTNING: Maximum speed external - prefetch, classification */
+  lightningModel: string;
 };
 
 /**
- * Default model configuration for SHEEP AI.
- * Sonnet 4.5 = fast + reliable JSON extraction (MUSCLES)
- * Opus 4.6 = state-of-the-art reasoning + 1M context (BRAIN)
+ * Default model configuration for SHEEP AI standalone.
+ * 
+ * Claude models route through claude-max-api-proxy (localhost:3456)
+ * which uses your Max Plan subscription ($200/mo flat).
+ * Gemini Flash is external (Google AI, ~$5/mo).
  */
 export const DEFAULT_SHEEP_MODELS: SheepModelConfig = {
-  fastModel: "claude-sonnet-4-5", // Fast, reliable JSON output
-  extractionModel: "claude-sonnet-4-5", // Fast extraction, clean JSON
-  reasoningModel: "claude-opus-4-6", // Best reasoning, 1M context, released 2025-02-05
+  brainModel: "claude-opus-4",     // BRAIN: Opus 4.6 via proxy (~50 tok/s, deepest reasoning)
+  muscleModel: "claude-sonnet-4",  // MUSCLE: Sonnet 4 via proxy (~120 tok/s, excellent JSON)
+  reflexModel: "claude-haiku-4",   // REFLEX: Haiku 4 via proxy (~200 tok/s, fast bulk)
+  lightningModel: "gemini-2.5-flash", // LIGHTNING: Gemini Flash external (~300 tok/s, offloads proxy)
 };
 
 /**
- * Model purpose types for createSheepLLMProvider
+ * Model purpose types for createSheepLLMProvider.
+ * 4-tier strategy: right model for each job.
  */
-export type SheepModelPurpose = "fast" | "extraction" | "reasoning";
+export type SheepModelPurpose = "brain" | "muscle" | "reflex" | "lightning";
+
+// Backward-compatible aliases
+/** @deprecated Use "muscle" instead */
+export type LegacyPurpose = "fast" | "extraction" | "reasoning";
+
+// Keep backward compatibility for existing code that uses old purpose names
+const PURPOSE_MAP: Record<string, SheepModelPurpose> = {
+  fast: "reflex",
+  extraction: "muscle",
+  reasoning: "brain",
+};
 
 /**
  * Extracted fact from LLM
@@ -1176,13 +1197,27 @@ export function createMockLLMProvider(responses?: Map<string, string>): LLMProvi
 }
 
 // =============================================================================
-// INTEGRATION WITH EXISTING PROVIDERS
+// STANDALONE LLM PROVIDERS (No Moltbot dependency)
 // =============================================================================
 
+import OpenAI from "openai";
+import Anthropic from "@anthropic-ai/sdk";
+import { GoogleGenerativeAI } from "@google/generative-ai";
+
 /**
- * Create an LLM provider from Moltbot's existing model configuration
- * This bridges SHEEP AI to Moltbot's multi-provider infrastructure
+ * Provider configuration for standalone SHEEP
  */
+export type StandaloneProviderConfig = {
+  model: string;
+  /** For Claude models: proxy URL (default: http://localhost:3456/v1) */
+  proxyUrl?: string;
+  /** For fallback: direct Anthropic API key */
+  anthropicApiKey?: string;
+  /** For Gemini models: Google AI API key */
+  googleApiKey?: string;
+};
+
+/** @deprecated Use StandaloneProviderConfig */
 export type MoltbotModelConfig = {
   provider: string;
   model: string;
@@ -1191,125 +1226,211 @@ export type MoltbotModelConfig = {
 };
 
 /**
- * Real LLM provider using Moltbot's infrastructure
- * Uses the completeSimple function from @mariozechner/pi-ai
+ * Create a Claude LLM provider.
+ * 
+ * Strategy:
+ * 1. Try claude-max-api-proxy at localhost:3456 (Max Plan, $0/token)
+ * 2. If proxy unavailable, use direct Anthropic API with ANTHROPIC_API_KEY
+ * 
+ * The provider auto-detects which path works at creation time.
  */
-export async function createLLMProviderFromConfig(
-  config: MoltbotModelConfig,
+export async function createClaudeProxyProvider(
+  model: string,
+  proxyUrl?: string,
 ): Promise<LLMProvider> {
-  // Dynamically import to avoid circular dependencies and keep startup light
-  const piAi = await import("@mariozechner/pi-ai");
-  const { resolveModel } = await import("../../agents/pi-embedded-runner/model.js");
-  const { getApiKeyForModel } = await import("../../agents/model-auth.js");
+  // Try proxy first
+  const baseURL = proxyUrl ?? process.env.CLAUDE_PROXY_URL ?? "http://localhost:3456/v1";
+  let useProxy = false;
 
-  let { model, error } = resolveModel(config.provider, config.model);
-
-  // If the model isn't found, clone from any available Anthropic model.
-  // models.json gets overwritten on startup, so we can't rely on it having all models.
-  // claude-opus-4-6 is always in models.json, so use it as the clone source.
-  if (!model && config.provider === "anthropic") {
-    // Try multiple siblings in order of likelihood
-    const siblingIds = ["claude-opus-4-6", "claude-opus-4-5", "claude-sonnet-4-5"];
-    for (const siblingId of siblingIds) {
-      const sibling = resolveModel("anthropic", siblingId);
-      if (sibling.model) {
-        model = {
-          ...sibling.model,
-          id: config.model,
-          name: config.model,
-        } as typeof sibling.model;
-        error = undefined;
-        console.log(`[SHEEP] Cloned ${config.provider}/${config.model} from ${siblingId}`);
-        break;
-      }
+  try {
+    const healthUrl = baseURL.replace("/v1", "") + "/health";
+    const resp = await fetch(healthUrl, { signal: AbortSignal.timeout(2000) });
+    if (resp.ok) {
+      useProxy = true;
+      console.log(`[SHEEP] Claude proxy available at ${baseURL}`);
     }
+  } catch {
+    console.log("[SHEEP] Claude proxy not available, using direct Anthropic API");
   }
 
-  if (!model || error) {
-    throw new Error(`Failed to resolve model ${config.provider}/${config.model}: ${error}`);
+  if (useProxy) {
+    // Proxy path (OpenAI-compatible format)
+    const client = new OpenAI({
+      apiKey: "not-needed",
+      baseURL,
+      timeout: 120_000,
+    });
+
+    return {
+      name: `proxy/${model}`,
+      complete: async (prompt: string, options?: LLMOptions): Promise<string> => {
+        try {
+          const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [];
+          if (options?.system) {
+            messages.push({ role: "system", content: options.system });
+          }
+          messages.push({ role: "user", content: prompt });
+
+          const response = await client.chat.completions.create({
+            model,
+            messages,
+            max_tokens: options?.maxTokens ?? 4096,
+            temperature: options?.temperature ?? 0.1,
+          });
+
+          return response.choices[0]?.message?.content ?? "";
+        } catch (err) {
+          // Proxy failed, fall back to direct API for this call
+          console.warn(`[SHEEP] Proxy call failed, falling back to direct API: ${err}`);
+          try {
+            return await callAnthropicDirect(model, prompt, options);
+          } catch (fallbackErr) {
+            console.error(`[SHEEP] Direct API also failed: ${fallbackErr}`);
+            return "";
+          }
+        }
+      },
+    };
   }
 
+  // Direct Anthropic API path
   return {
-    name: `${config.provider}/${config.model}`,
+    name: `anthropic/${model}`,
     complete: async (prompt: string, options?: LLMOptions): Promise<string> => {
-      const apiKeyResult = await getApiKeyForModel({ model });
-      const apiKey = typeof apiKeyResult === "string" ? apiKeyResult : apiKeyResult?.apiKey;
-      const userContent = options?.system ? `${options.system}\n\n${prompt}` : prompt;
-      const temperature = options?.temperature ?? 0.1;
-
-      // Retry with exponential backoff for rate limits (429)
-      const MAX_RETRIES = 4;
+      const MAX_RETRIES = 3;
       for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-        const res = await piAi.completeSimple(
-          model,
-          {
-            messages: [{ role: "user" as const, content: userContent, timestamp: Date.now() }],
-          },
-          {
-            apiKey: apiKey ?? undefined,
-            maxTokens: options?.maxTokens ?? 2000,
-            temperature,
-          },
-        );
-
-        // Check for API errors
-        const stopReason = (res as any).stopReason;
-        const errorMessage = (res as any).errorMessage as string | undefined;
-
-        if (stopReason === "error" || errorMessage) {
-          const isRateLimit = errorMessage?.includes("429") || errorMessage?.includes("rate_limit");
+        try {
+          return await callAnthropicDirect(model, prompt, options);
+        } catch (err) {
+          const errMsg = err instanceof Error ? err.message : String(err);
+          const isRateLimit = errMsg.includes("429") || errMsg.includes("rate_limit");
 
           if (isRateLimit && attempt < MAX_RETRIES) {
-            // Exponential backoff: 5s, 15s, 45s, 120s
-            const delay = Math.min(5000 * Math.pow(3, attempt), 120_000);
-            console.warn(
-              `[SHEEP] Rate limited (attempt ${attempt + 1}/${MAX_RETRIES + 1}), retrying in ${delay / 1000}s...`,
-            );
+            const delay = Math.min(5000 * Math.pow(2, attempt), 60000);
+            console.warn(`[SHEEP] Rate limited (attempt ${attempt + 1}/${MAX_RETRIES + 1}), retrying in ${delay / 1000}s...`);
             await new Promise((resolve) => setTimeout(resolve, delay));
-            continue; // retry
+            continue;
           }
 
-          const errMsg = errorMessage || "Unknown API error";
-          throw new Error(
-            `API error after ${attempt + 1} attempts (${stopReason}): ${errMsg.slice(0, 300)}`,
-          );
+          if (attempt < MAX_RETRIES) {
+            const delay = Math.min(2000 * Math.pow(2, attempt), 15000);
+            await new Promise((resolve) => setTimeout(resolve, delay));
+            continue;
+          }
+
+          console.error(`[SHEEP] LLM call failed after ${MAX_RETRIES + 1} attempts: ${errMsg.slice(0, 200)}`);
+          return "";
         }
-
-        // Success — extract text
-        const textBlocks = res.content || [];
-        const extractedText = textBlocks
-          .filter(
-            (block: { type: string }): block is { type: "text"; text: string } =>
-              block.type === "text",
-          )
-          .map((block) => block.text.trim())
-          .filter(Boolean)
-          .join("\n");
-
-        return extractedText;
       }
-
-      throw new Error("Exhausted all retries");
+      return "";
     },
   };
 }
 
 /**
+ * Direct Anthropic API call -- fallback when proxy is down.
+ * Uses ANTHROPIC_API_KEY from environment (pay-per-token).
+ */
+async function callAnthropicDirect(
+  model: string,
+  prompt: string,
+  options?: LLMOptions,
+): Promise<string> {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) {
+    throw new Error("ANTHROPIC_API_KEY not set -- cannot use direct API fallback");
+  }
+
+  // Map short model names to full Anthropic model IDs
+  const modelMap: Record<string, string> = {
+    "claude-opus-4": "claude-opus-4-6",
+    "claude-sonnet-4": "claude-sonnet-4-20250514",
+    "claude-haiku-4": "claude-haiku-4-5-20251001",
+    "claude-opus-4-6": "claude-opus-4-6",
+    "claude-sonnet-4-5": "claude-sonnet-4-5-20250929",
+  };
+  const anthropicModel = modelMap[model] ?? model;
+
+  const client = new Anthropic({ apiKey });
+  const response = await client.messages.create({
+    model: anthropicModel,
+    max_tokens: options?.maxTokens ?? 4096,
+    temperature: options?.temperature ?? 0.1,
+    ...(options?.system ? { system: options.system } : {}),
+    messages: [{ role: "user", content: prompt }],
+  });
+
+  return response.content
+    .filter((b): b is Anthropic.TextBlock => b.type === "text")
+    .map((b) => b.text)
+    .join("\n");
+}
+
+/**
+ * Create a Gemini Flash LLM provider for speed-critical tasks.
+ * Used for prefetch classification and quick entity extraction.
+ * External to Max Plan -- offloads rate limit pressure.
+ */
+export async function createGeminiFlashProvider(
+  model: string = "gemini-2.5-flash",
+): Promise<LLMProvider> {
+  const apiKey = process.env.GOOGLE_AI_API_KEY;
+  if (!apiKey) {
+    console.warn("[SHEEP] GOOGLE_AI_API_KEY not set, Gemini Flash unavailable. Using mock.");
+    return createMockLLMProvider();
+  }
+
+  const genAI = new GoogleGenerativeAI(apiKey);
+  const geminiModel = genAI.getGenerativeModel({ model });
+
+  return {
+    name: `gemini/${model}`,
+    complete: async (prompt: string, options?: LLMOptions): Promise<string> => {
+      try {
+        const fullPrompt = options?.system ? `${options.system}\n\n${prompt}` : prompt;
+        const result = await geminiModel.generateContent({
+          contents: [{ role: "user", parts: [{ text: fullPrompt }] }],
+          generationConfig: {
+            maxOutputTokens: options?.maxTokens ?? 2048,
+            temperature: options?.temperature ?? 0.1,
+          },
+        });
+        return result.response.text() ?? "";
+      } catch (err) {
+        console.error(`[SHEEP] Gemini Flash error: ${err}`);
+        return "";
+      }
+    },
+  };
+}
+
+/**
+ * @deprecated Legacy Moltbot provider -- kept for backward compatibility.
+ * Falls through to createClaudeProxyProvider.
+ */
+export async function createLLMProviderFromConfig(
+  config: MoltbotModelConfig,
+): Promise<LLMProvider> {
+  return createClaudeProxyProvider(config.model, config.baseUrl);
+}
+
+/**
  * Create an LLM provider for SHEEP tasks based on purpose.
- *
- * Model selection strategy (optimized for Claude Max Plan):
- * - "fast": Haiku for latency-critical operations (prefetch, quick classification)
- * - "extraction": Sonnet for fact/causal extraction (quality matters more than speed)
- * - "reasoning": Sonnet for sleep consolidation (complex reasoning needs quality)
- *
- * @param purpose - The purpose determines which model to use
- * @param modelConfig - Optional custom model configuration
+ * 
+ * 4-TIER STRATEGY (right model for each job):
+ * - "brain":     Opus 4.6 via Max Plan proxy (sleep, chat, contradictions)
+ * - "muscle":    Sonnet 4 via Max Plan proxy (fact/causal/foresight extraction)
+ * - "reflex":    Haiku 4 via Max Plan proxy (summaries, NER, procedures)
+ * - "lightning":  Gemini 2.5 Flash external (prefetch, classification)
+ * 
+ * Also accepts legacy purpose names: "fast" → reflex, "extraction" → muscle, "reasoning" → brain
  */
 export async function createSheepLLMProvider(
-  purpose: SheepModelPurpose = "extraction",
-  modelConfig?: Partial<SheepModelConfig> & { provider?: string },
+  purpose: SheepModelPurpose | string = "muscle",
+  modelConfig?: Partial<SheepModelConfig>,
 ): Promise<LLMProvider> {
-  const provider = modelConfig?.provider ?? "anthropic";
+  // Map legacy purpose names to new 4-tier names
+  const resolvedPurpose = PURPOSE_MAP[purpose] ?? purpose as SheepModelPurpose;
 
   // Merge with defaults
   const models: SheepModelConfig = {
@@ -1317,42 +1438,50 @@ export async function createSheepLLMProvider(
     ...modelConfig,
   };
 
-  // Select model based on purpose
+  // Select model based on purpose tier
   let model: string;
-  switch (purpose) {
-    case "fast":
-      model = models.fastModel;
+  switch (resolvedPurpose) {
+    case "brain":
+      model = models.brainModel;
       break;
-    case "reasoning":
-      model = models.reasoningModel;
+    case "muscle":
+      model = models.muscleModel;
       break;
-    case "extraction":
+    case "reflex":
+      model = models.reflexModel;
+      break;
+    case "lightning":
+      model = models.lightningModel;
+      break;
     default:
-      model = models.extractionModel;
+      model = models.muscleModel; // safe default
       break;
   }
 
   try {
-    return await createLLMProviderFromConfig({ provider, model });
+    // Route to the right provider based on model name
+    if (model.startsWith("gemini-")) {
+      // LIGHTNING tier: Gemini Flash via Google AI SDK (external, offloads proxy)
+      return await createGeminiFlashProvider(model);
+    } else {
+      // BRAIN/MUSCLE/REFLEX tiers: Claude via Max Plan proxy
+      return await createClaudeProxyProvider(model);
+    }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.warn(
-      `[SHEEP] Failed to create LLM provider (${purpose}/${model}): ${message}. Falling back to mock.`,
+      `[SHEEP] Failed to create LLM provider (${resolvedPurpose}/${model}): ${message.slice(0, 200)}. Falling back to mock.`,
     );
     return createMockLLMProvider();
   }
 }
 
 /**
- * Legacy function signature for backward compatibility.
  * @deprecated Use createSheepLLMProvider(purpose, config) instead
  */
 export async function createSheepLLMProviderLegacy(moltbotConfig?: {
   extractionModel?: string;
   extractionProvider?: string;
 }): Promise<LLMProvider> {
-  return createSheepLLMProvider("extraction", {
-    provider: moltbotConfig?.extractionProvider,
-    extractionModel: moltbotConfig?.extractionModel,
-  });
+  return createSheepLLMProvider("muscle");
 }

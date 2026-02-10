@@ -11,10 +11,28 @@
  * @module sheep/tools/memory-tools
  */
 
-import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
-import { Type } from "@sinclair/typebox";
+// Standalone type definitions (no @mariozechner/pi-agent-core dependency)
+import { type TSchema, Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../stubs/config.js";
-import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+
+/** Agent tool definition (standalone, compatible with pi-agent-core interface) */
+export type AgentTool<TInput = unknown, TOutput = unknown> = {
+  name: string;
+  description: string;
+  inputSchema: TSchema;
+  execute: (input: TInput) => Promise<AgentToolResult<TOutput>>;
+};
+
+/** Agent tool result */
+export type AgentToolResult<T = unknown> = {
+  content: T;
+  isError?: boolean;
+};
+
+/** Resolve agent ID from environment */
+function resolveSessionAgentId(): string {
+  return process.env.SHEEP_AGENT_ID ?? process.env.AGENT_ID ?? "default";
+}
 import { buildCausalChain } from "../causal/causal-extractor.js";
 import { getSheepIntegration } from "../integration/moltbot-bridge.js";
 import { SheepDatabase } from "../memory/database.js";
