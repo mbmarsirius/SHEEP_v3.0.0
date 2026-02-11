@@ -129,13 +129,19 @@ async function main(): Promise<void> {
     log.warn("Failed to start consolidation scheduler", { error: String(err) });
   }
 
-  // 8. Create and start Telegram bot
+  // 8. Create and start Telegram bot (always uses Opus 4.6 / brain)
   const bot = createSheepBot({
     token: telegramToken,
     agentId,
     db,
     brainLLM,
     muscleLLM,
+  });
+
+  // Prevent crash on transient errors (network, Telegram API, etc.)
+  bot.catch((err) => {
+    log.error("Telegram bot error", { error: String(err.error) });
+    // Don't call bot.stop() — keep running for transient network errors
   });
 
   // Graceful shutdown

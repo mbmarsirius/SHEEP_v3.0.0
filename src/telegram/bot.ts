@@ -47,8 +47,8 @@ export type SheepBotConfig = {
   token: string;
   agentId: string;
   db: SheepDatabase;
-  brainLLM: LLMProvider;     // Opus 4.6 for chat
-  muscleLLM: LLMProvider;    // Sonnet 4 for learning
+  brainLLM: LLMProvider;   // Opus 4.6 for chat (always used)
+  muscleLLM: LLMProvider;  // Sonnet 4 for learning
   maxHistoryLength?: number;
 };
 
@@ -295,6 +295,9 @@ export function createSheepBot(config: SheepBotConfig): Bot<SheepContext> {
     log.info("Message received", { chatId, length: userMessage.length });
 
     try {
+      // 0. Show typing immediately (user feedback that we got their message)
+      await ctx.api.sendChatAction(chatId, "typing");
+
       // 1. Add to session history
       ctx.session.history.push({
         role: "user",
@@ -307,43 +310,41 @@ export function createSheepBot(config: SheepBotConfig): Bot<SheepContext> {
         ctx.session.history = ctx.session.history.slice(-maxHistory);
       }
 
-      // 2. Prefetch relevant memories
+      // 2. Prefetch relevant memories (trimmed for speed)
       let memoryContext = "";
       try {
         const facts = db.findFacts({ activeOnly: true });
-        // Quick keyword search for relevant facts
         const words = userMessage.toLowerCase().split(/\s+/).filter((w) => w.length > 3);
         const relevant = facts.filter((f) => {
           const text = `${f.subject} ${f.predicate} ${f.object}`.toLowerCase();
           return words.some((w) => text.includes(w));
-        }).slice(0, 15);
+        }).slice(0, 8);
 
         if (relevant.length > 0) {
           memoryContext = "\n\n[SHEEP Memory - Known Facts]\n" +
             relevant.map((f) => `- ${f.subject} ${f.predicate} ${f.object}`).join("\n");
         }
 
-        // Also check foresights
         try {
           const foresights = db.getActiveForesights("user");
           if (foresights.length > 0) {
             memoryContext += "\n\n[SHEEP Memory - Predictions/Plans]\n" +
-              foresights.slice(0, 5).map((f) => `- ${f.description}`).join("\n");
+              foresights.slice(0, 3).map((f) => `- ${f.description}`).join("\n");
           }
         } catch {
-          // Foresights table might not exist yet
+          /* foresights table might not exist */
         }
       } catch (err) {
         log.warn("Memory prefetch failed", { error: String(err) });
       }
 
       // 3. Build conversation context
-      const recentHistory = ctx.session.history.slice(-10);
+      const recentHistory = ctx.session.history.slice(-8);
       const historyText = recentHistory
         .map((h) => `${h.role === "user" ? "User" : "SHEEP"}: ${h.content}`)
         .join("\n");
 
-      // 4. Generate response using BRAIN (Opus 4.6)
+      // 4. System prompt
       const systemPrompt = `You are Counting Sheep, a personal AI companion powered by SHEEP AI (Sleep-based Hierarchical Emergent Entity Protocol).
 
 ## Your Identity
@@ -383,28 +384,75 @@ ${memoryContext || "No memories yet — this is a fresh start. Everything Mus te
 - For coding questions, you have deep technical knowledge. Mus is a developer building AI systems.
 - Keep your responses readable — use short paragraphs, occasional line breaks. No walls of text.`;
 
-      const response = await brainLLM.complete(
-        `${historyText}\nUser: ${userMessage}\nSHEEP:`,
-        {
-          system: systemPrompt,
-          maxTokens: 1500,
-          temperature: 0.7,
-        },
-      );
+      // 5. Generate response — use streaming when available (instant first token)
+      const promptText = `${historyText}\nUser: ${userMessage}\nSHEEP:`;
+      const llmOptions = { system: systemPrompt, maxTokens: 900, temperature: 0.7 };
 
-      const reply = response.trim() || "I'm here, but I couldn't generate a response. Try again?";
+      let reply = "";
+      const streamFn = brainLLM.completeStream;
 
-      // 5. Send response
-      await ctx.reply(reply);
+      if (streamFn) {
+        // STREAMING: first tokens appear in ~2–5s instead of 30–60s
+        let streamTypingInterval: ReturnType<typeof setInterval> | undefined;
+        try {
+          let buf = "";
+          let lastEdit = 0;
+          const EDIT_INTERVAL_MS = 800; // Telegram rate limit ~1 edit/sec
+          let sentMsgId: number | undefined;
+          streamTypingInterval = setInterval(() => ctx.api.sendChatAction(chatId, "typing").catch(() => {}), 4000);
 
-      // 6. Add assistant response to history
+          for await (const chunk of streamFn(promptText, llmOptions)) {
+            buf += chunk;
+            const now = Date.now();
+            const minForFirst = 20;
+            if (buf.length >= minForFirst && (sentMsgId === undefined || now - lastEdit >= EDIT_INTERVAL_MS)) {
+              if (sentMsgId === undefined) {
+                const sent = await ctx.reply(buf.trim() || "🐑 …");
+                sentMsgId = sent.message_id;
+              } else {
+                await ctx.api.editMessageText(chatId, sentMsgId, buf.trim()).catch(() => {});
+              }
+              lastEdit = now;
+            }
+          }
+          if (streamTypingInterval) clearInterval(streamTypingInterval);
+          reply = buf.trim();
+          if (sentMsgId !== undefined && reply) {
+            await ctx.api.editMessageText(chatId, sentMsgId, reply).catch(() => {});
+          } else if (!reply && sentMsgId !== undefined) {
+            await ctx.api.deleteMessage(chatId, sentMsgId).catch(() => {});
+          }
+        } catch (streamErr) {
+          if (streamTypingInterval) clearInterval(streamTypingInterval);
+          log.warn("Stream failed, falling back to non-streaming", { error: String(streamErr) });
+          reply = "";
+        }
+      }
+
+      if (!reply) {
+        const typingInterval = setInterval(() => ctx.api.sendChatAction(chatId, "typing").catch(() => {}), 4000);
+        try {
+          reply = (await brainLLM.complete(promptText, llmOptions))?.trim() || "";
+          if (!reply) reply = (await brainLLM.complete(promptText, llmOptions))?.trim() || "";
+        } catch {
+          reply = "";
+        } finally {
+          clearInterval(typingInterval);
+        }
+        if (!reply) {
+          reply = "I got your message but had trouble generating my reply (the AI service was slow or unresponsive). Please try again in a moment.";
+        }
+        await ctx.reply(reply);
+      }
+
+      // 7. Add assistant response to history
       ctx.session.history.push({
         role: "assistant",
         content: reply,
         timestamp: now(),
       });
 
-      // 7. Learn from this conversation turn (async, don't block)
+      // 8. Learn from this conversation turn (async, don't block)
       learnFromTurn(db, muscleLLM, agentId, userMessage, reply).catch((err) => {
         log.warn("Background learning failed", { error: String(err) });
       });

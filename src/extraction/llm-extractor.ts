@@ -28,6 +28,8 @@ import { now } from "../memory/schema.js";
 export type LLMProvider = {
   /** Generate a completion from a prompt */
   complete: (prompt: string, options?: LLMOptions) => Promise<string>;
+  /** Stream completion chunks. When available, use for faster first-token delivery. */
+  completeStream?: (prompt: string, options?: LLMOptions) => AsyncIterable<string>;
   /** Provider name for logging */
   name: string;
 };
@@ -1254,7 +1256,7 @@ export async function createClaudeProxyProvider(
   }
 
   if (useProxy) {
-    // Proxy path (OpenAI-compatible format)
+    // Proxy path (OpenAI-compatible format) — with streaming for fast first-token
     const client = new OpenAI({
       apiKey: "not-needed",
       baseURL,
@@ -1288,6 +1290,37 @@ export async function createClaudeProxyProvider(
             console.error(`[SHEEP] Direct API also failed: ${fallbackErr}`);
             return "";
           }
+        }
+      },
+      completeStream: async function* (
+        prompt: string,
+        options?: LLMOptions,
+      ): AsyncIterable<string> {
+        try {
+          const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [];
+          if (options?.system) {
+            messages.push({ role: "system", content: options.system });
+          }
+          messages.push({ role: "user", content: prompt });
+
+          const stream = await client.chat.completions.create({
+            model,
+            messages,
+            max_tokens: options?.maxTokens ?? 4096,
+            temperature: options?.temperature ?? 0.1,
+            stream: true,
+          });
+
+          for await (const chunk of stream) {
+            const content = chunk.choices[0]?.delta?.content;
+            if (typeof content === "string" && content.length > 0) {
+              yield content;
+            }
+          }
+        } catch (err) {
+          console.warn(`[SHEEP] Proxy stream failed, falling back to non-streaming: ${err}`);
+          const text = await callAnthropicDirect(model, prompt, options);
+          if (text) yield text;
         }
       },
     };
