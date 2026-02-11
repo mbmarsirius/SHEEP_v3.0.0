@@ -30,6 +30,7 @@ import consolidateRoutes from "./routes/consolidate.js";
 import billingRoutes from "./routes/billing.js";
 import { healthRouter, statusRouter } from "./routes/health.js";
 import { startCloudTelegramBot } from "./telegram-bot.js";
+import whatsappRouter from "./channels/whatsapp.js";
 
 // =============================================================================
 // BOOTSTRAP
@@ -137,6 +138,24 @@ footer a{color:#60a5fa;text-decoration:none}
 // =============================================================================
 
 app.use(healthRouter);
+
+// WhatsApp webhook (public -- Meta needs to reach it without API key auth)
+app.use(whatsappRouter);
+
+// OpenAPI spec for GPT Store / integrations
+app.get("/openapi.yaml", async (_req, res) => {
+  try {
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const specPath = path.join(process.cwd(), "packages", "openai-gpt", "openapi.yaml");
+    if (fs.existsSync(specPath)) {
+      res.setHeader("Content-Type", "text/yaml");
+      res.send(fs.readFileSync(specPath, "utf-8"));
+    } else {
+      res.status(404).json({ error: "OpenAPI spec not found" });
+    }
+  } catch { res.status(500).json({ error: "Failed to serve spec" }); }
+});
 
 // =============================================================================
 // AUTHENTICATED ROUTES

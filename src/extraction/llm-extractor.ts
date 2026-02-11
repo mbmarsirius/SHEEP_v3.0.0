@@ -879,7 +879,21 @@ Conversation:`,
   // Apply maxFacts limit
   const limitedFacts = deduplicated.slice(0, maxFacts);
 
-  return limitedFacts.map((fact) => ({
+  // Verification pass: filter out facts that aren't grounded in the conversation
+  const verifiedFacts = limitedFacts.filter((fact) => {
+    const factText = `${fact.subject} ${fact.predicate} ${fact.object}`.toLowerCase();
+    const convLower = conversationText.toLowerCase();
+    // At least one key word from the fact must appear in the conversation
+    const factWords = factText.split(/\s+/).filter((w) => w.length > 3);
+    const grounded = factWords.some((w) => convLower.includes(w));
+    if (!grounded && fact.confidence < 0.95) {
+      // Fact has no lexical overlap with conversation and isn't high-confidence
+      return false;
+    }
+    return true;
+  });
+
+  return verifiedFacts.map((fact) => ({
     subject: fact.subject,
     predicate: fact.predicate.toLowerCase().replace(/\s+/g, "_"),
     object: fact.object,

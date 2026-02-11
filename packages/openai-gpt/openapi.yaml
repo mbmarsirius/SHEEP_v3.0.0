@@ -1,0 +1,237 @@
+openapi: 3.1.0
+info:
+  title: SHEEP AI - Cognitive Memory API
+  description: >
+    Add persistent cognitive memory to any AI. SHEEP remembers facts, preferences,
+    relationships, and causal chains across all conversations. The AI that never forgets.
+  version: 0.3.0
+  contact:
+    email: mb@marsirius.ai
+    url: https://marsirius.ai/sheep
+
+servers:
+  - url: https://sheep-cloud-production.up.railway.app
+    description: Production
+
+paths:
+  /v1/remember:
+    post:
+      operationId: remember
+      summary: Store a fact in cognitive memory
+      description: Store a fact about the user, their preferences, projects, or any important information.
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [subject, predicate, object]
+              properties:
+                subject:
+                  type: string
+                  description: "The entity (e.g. 'user', a person's name, a project)"
+                predicate:
+                  type: string
+                  description: "The relationship (e.g. 'prefers', 'works_at', 'name_is')"
+                object:
+                  type: string
+                  description: "The value (e.g. 'TypeScript', 'Acme Corp')"
+                confidence:
+                  type: number
+                  minimum: 0
+                  maximum: 1
+                  description: "Confidence 0-1 (default 0.9)"
+      responses:
+        '201':
+          description: Fact stored
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  fact:
+                    type: object
+                    properties:
+                      id: { type: string }
+                      subject: { type: string }
+                      predicate: { type: string }
+                      object: { type: string }
+                      confidence: { type: number }
+
+  /v1/recall:
+    post:
+      operationId: recall
+      summary: Search cognitive memory
+      description: >
+        Search for relevant facts using semantic similarity. Use this when you need to
+        remember something about the user, their preferences, past context, or decisions.
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [query]
+              properties:
+                query:
+                  type: string
+                  description: "What to search for in memory"
+                limit:
+                  type: integer
+                  description: "Maximum results (default 10)"
+      responses:
+        '200':
+          description: Search results
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  query: { type: string }
+                  facts:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string }
+                        subject: { type: string }
+                        predicate: { type: string }
+                        object: { type: string }
+                        confidence: { type: number }
+                        relevance: { type: number }
+
+  /v1/why:
+    post:
+      operationId: why
+      summary: Query causal reasoning chains
+      description: "Find cause-effect relationships. Ask 'why did X happen?' and get causal chains."
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [effect]
+              properties:
+                effect:
+                  type: string
+                  description: "The effect/outcome to explain"
+                maxDepth:
+                  type: integer
+                  description: "Maximum chain depth (default 5)"
+      responses:
+        '200':
+          description: Causal chain
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  effect: { type: string }
+                  chain:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        cause: { type: string }
+                        effect: { type: string }
+                        mechanism: { type: string }
+                        confidence: { type: number }
+
+  /v1/facts:
+    get:
+      operationId: listFacts
+      summary: List all stored facts
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, default: 20 }
+        - name: active
+          in: query
+          schema: { type: boolean, default: true }
+      responses:
+        '200':
+          description: Fact list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  count: { type: integer }
+                  total: { type: integer }
+                  facts: { type: array }
+
+  /v1/forget:
+    post:
+      operationId: forget
+      summary: Forget specific facts
+      description: "Remove facts by topic or specific ID. GDPR right-to-erasure."
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                topic:
+                  type: string
+                  description: "Topic/keyword to forget all related facts"
+                factId:
+                  type: string
+                  description: "Specific fact ID to forget"
+      responses:
+        '200':
+          description: Forget result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  forgotten: { type: integer }
+
+  /v1/status:
+    get:
+      operationId: getStatus
+      summary: Get memory statistics
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Memory stats
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  userId: { type: string }
+                  tier: { type: string }
+                  memory:
+                    type: object
+                    properties:
+                      episodes: { type: integer }
+                      facts: { type: integer }
+                      causalLinks: { type: integer }
+                      procedures: { type: integer }
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      description: "SHEEP API key (sk-sheep-...)"

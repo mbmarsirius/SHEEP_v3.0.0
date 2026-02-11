@@ -13,6 +13,7 @@ import { Router, type Router as IRouter } from "express";
 import type { AuthenticatedRequest } from "../middleware/api-key-auth.js";
 import { requireTier } from "../middleware/tier-gate.js";
 import { getUserDatabase } from "../db-manager.js";
+import { semanticRecall } from "../semantic-recall.js";
 import { now } from "../../memory/schema.js";
 
 const router: IRouter = Router();
@@ -66,7 +67,7 @@ router.post("/remember", (req: AuthenticatedRequest, res) => {
 // POST /v1/recall -- Search memory
 // =============================================================================
 
-router.post("/recall", (req: AuthenticatedRequest, res) => {
+router.post("/recall", async (req: AuthenticatedRequest, res) => {
   try {
     const { query, type, limit } = req.body;
 
@@ -79,38 +80,26 @@ router.post("/recall", (req: AuthenticatedRequest, res) => {
     }
 
     const maxResults = Math.min(typeof limit === "number" ? limit : 10, 50);
-    const searchType = type ?? "all"; // "facts" | "episodes" | "all"
     const db = getUserDatabase(req.userId!);
 
-    const results: { facts?: unknown[]; episodes?: unknown[] } = {};
+    // Get all active facts
+    const allFacts = db.findFacts({ activeOnly: true });
 
-    if (searchType === "facts" || searchType === "all") {
-      const allFacts = db.findFacts({ activeOnly: true });
-      const queryWords = String(query).toLowerCase().split(/\s+/).filter((w) => w.length > 2);
-      const matching = allFacts
-        .filter((f) => {
-          const text = `${f.subject} ${f.predicate} ${f.object}`.toLowerCase();
-          return queryWords.some((w) => text.includes(w));
-        })
-        .slice(0, maxResults);
+    // Use semantic search (embedding-based with keyword fallback)
+    const scored = await semanticRecall(req.userId!, String(query), allFacts, maxResults);
 
-      results.facts = matching.map((f) => ({
+    res.json({
+      ok: true,
+      query,
+      type: type ?? "all",
+      facts: scored.map((f) => ({
         id: f.id,
         subject: f.subject,
         predicate: f.predicate,
         object: f.object,
         confidence: f.confidence,
-      }));
-    }
-
-    // Note: Episode search requires semantic/embedding search (future enhancement).
-    // For now, recall searches facts only. Episodes are accessed via consolidation.
-
-    res.json({
-      ok: true,
-      query,
-      type: searchType,
-      ...results,
+        relevance: Math.round(f.score * 100) / 100,
+      })),
     });
   } catch (err) {
     console.error("[cloud/memory] recall error:", err);
