@@ -10,6 +10,7 @@
 
 import Anthropic from "@anthropic-ai/sdk";
 import { getUserDatabase } from "../db-manager.js";
+import { semanticRecall } from "../semantic-recall.js";
 import { now } from "../../memory/schema.js";
 import type { LLMProvider } from "../../extraction/llm-extractor.js";
 
@@ -81,22 +82,16 @@ export async function processMessage(
 
   const db = getUserDatabase(userId);
 
-  // 1. Fetch relevant memories
+  // 1. Fetch relevant memories using hybrid semantic search
   let memoryContext = "";
   try {
     const facts = db.findFacts({ activeOnly: true });
-    const words = userMessage.toLowerCase().split(/\s+/).filter((w) => w.length > 3);
-    const relevant = facts
-      .filter((f) => {
-        const text = `${f.subject} ${f.predicate} ${f.object}`.toLowerCase();
-        return words.some((w) => text.includes(w));
-      })
-      .slice(0, 8);
+    const relevant = await semanticRecall(userId, userMessage, facts, 8);
 
     if (relevant.length > 0) {
       memoryContext =
         "\n\n[Your memories about this user]\n" +
-        relevant.map((f) => `- ${f.subject} ${f.predicate} ${f.object}`).join("\n");
+        relevant.map((f) => `- ${f.subject} ${f.predicate.replace(/_/g, " ")} ${f.object}`).join("\n");
     }
   } catch { /* no facts yet */ }
 

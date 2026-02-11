@@ -1,0 +1,32 @@
+{
+  "name": "@sheep-ai/openclaw-memory",
+  "version": "0.1.0",
+  "description": "SHEEP cognitive memory extension for OpenClaw/ClawBot. Your agent remembers everything.",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js"
+  },
+  "keywords": [
+    "openclaw",
+    "clawbot",
+    "moltbot",
+    "ai",
+    "memory",
+    "cognitive",
+    "sheep",
+    "extension",
+    "plugin"
+  ],
+  "author": "Marsirius AI Labs",
+  "license": "MIT",
+  "dependencies": {},
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
