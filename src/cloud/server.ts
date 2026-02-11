@@ -27,6 +27,7 @@ import { loadApiKeys, apiKeyAuth } from "./middleware/api-key-auth.js";
 import { rateLimiter } from "./middleware/rate-limiter.js";
 import memoryRoutes from "./routes/memory.js";
 import consolidateRoutes from "./routes/consolidate.js";
+import billingRoutes from "./routes/billing.js";
 import { healthRouter, statusRouter } from "./routes/health.js";
 
 // =============================================================================
@@ -88,6 +89,9 @@ app.use("/v1", memoryRoutes);
 
 // Consolidation
 app.use("/v1", consolidateRoutes);
+
+// Billing
+app.use("/v1", billingRoutes);
 
 // Status (authenticated, under /v1)
 app.use("/v1", statusRouter);

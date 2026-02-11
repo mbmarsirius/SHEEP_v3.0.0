@@ -1,0 +1,40 @@
+{
+  "name": "@sheep-ai/mcp-server",
+  "version": "0.1.0",
+  "description": "SHEEP AI cognitive memory - MCP server for Cursor, Claude Desktop, and any MCP host",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "sheep-mcp": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "npx tsx src/index.ts"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "ai",
+    "memory",
+    "cognitive",
+    "sheep"
+  ],
+  "author": "Marsirius AI Labs",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mbmarsirius/sheep-mcp"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.26.0",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
