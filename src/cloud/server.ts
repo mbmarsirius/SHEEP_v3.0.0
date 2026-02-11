@@ -147,13 +147,16 @@ app.get("/openapi.yaml", async (_req, res) => {
   try {
     const fs = await import("node:fs");
     const path = await import("node:path");
-    const specPath = path.join(process.cwd(), "packages", "openai-gpt", "openapi.yaml");
-    if (fs.existsSync(specPath)) {
-      res.setHeader("Content-Type", "text/yaml");
-      res.send(fs.readFileSync(specPath, "utf-8"));
-    } else {
-      res.status(404).json({ error: "OpenAPI spec not found" });
+    // Try multiple locations (dev vs Docker)
+    for (const base of [process.cwd(), "/app"]) {
+      const specPath = path.join(base, "packages", "openai-gpt", "openapi.yaml");
+      if (fs.existsSync(specPath)) {
+        res.setHeader("Content-Type", "text/yaml");
+        res.send(fs.readFileSync(specPath, "utf-8"));
+        return;
+      }
     }
+    res.status(404).json({ error: "OpenAPI spec not found" });
   } catch { res.status(500).json({ error: "Failed to serve spec" }); }
 });
 

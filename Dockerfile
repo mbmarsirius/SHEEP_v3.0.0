@@ -29,10 +29,11 @@ WORKDIR /app
 
 RUN npm install -g pnpm
 
-# Copy built files and dependencies
+# Copy built files, packages, and dependencies
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/package.json ./
+COPY --from=builder /app/packages ./packages
 
 # Create data directory for per-user SQLite databases
 RUN mkdir -p /data
