@@ -387,7 +387,7 @@ Respond with a JSON array only. If no causal relationships found, respond with [
 /**
  * Extract causal links using LLM for deeper understanding
  */
-export async function extractCausalLinksWithLLM(
+export async function extractCausalLinksFromEpisode(
   episode: Episode,
   llm: LLMProvider,
   options: CausalExtractionOptions = {},
@@ -490,13 +490,12 @@ export function extractCausalLinksFromEpisodeRegex(
 }
 
 /**
- * Extract causal links from an episode — uses LLM if provided, regex fallback
+ * Extract causal links from an episode — regex-based (sync)
  */
-export function extractCausalLinksFromEpisode(
+export function extractCausalLinksFromEpisodeSync(
   episode: Episode,
   options: CausalExtractionOptions = {},
 ): Omit<CausalLink, "id" | "createdAt" | "updatedAt">[] {
-  // Sync version always uses regex (for backward compat)
   return extractCausalLinksFromEpisodeRegex(episode, options);
 }
 
@@ -548,7 +547,7 @@ export function extractCausalLinksFromEpisodes(
   const allLinks: Omit<CausalLink, "id" | "createdAt" | "updatedAt">[] = [];
 
   for (const episode of episodes) {
-    const episodeLinks = extractCausalLinksFromEpisode(episode, options);
+    const episodeLinks = extractCausalLinksFromEpisodeSync(episode, options);
     allLinks.push(...episodeLinks);
   }
 
@@ -567,7 +566,7 @@ export async function extractCausalLinksFromEpisodesWithLLM(
   const allLinks: Omit<CausalLink, "id" | "createdAt" | "updatedAt">[] = [];
 
   for (const episode of episodes) {
-    const episodeLinks = await extractCausalLinksWithLLM(episode, llm, options);
+    const episodeLinks = await extractCausalLinksFromEpisode(episode, llm, options);
     allLinks.push(...episodeLinks);
   }
 

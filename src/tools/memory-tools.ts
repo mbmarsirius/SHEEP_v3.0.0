@@ -11,9 +11,14 @@
  * @module sheep/tools/memory-tools
  */
 
-// Standalone type definitions (no @mariozechner/pi-agent-core dependency)
 import { type TSchema, Type } from "@sinclair/typebox";
-import type { OpenClawConfig } from "../stubs/config.js";
+import { buildCausalChain } from "../causal/causal-extractor.js";
+import { SheepDatabase } from "../memory/database.js";
+import { now } from "../memory/schema.js";
+
+// =============================================================================
+// TYPES
+// =============================================================================
 
 /** Agent tool definition (standalone, compatible with pi-agent-core interface) */
 export type AgentTool<TInput = unknown, TOutput = unknown> = {
@@ -29,36 +34,22 @@ export type AgentToolResult<T = unknown> = {
   isError?: boolean;
 };
 
+// biome-ignore lint/suspicious/noExplicitAny: TypeBox schema type variance
+type AnyAgentTool = AgentTool<any, unknown>;
+
 /** Resolve agent ID from environment */
 function resolveSessionAgentId(): string {
   return process.env.SHEEP_AGENT_ID ?? process.env.AGENT_ID ?? "default";
 }
-import { buildCausalChain } from "../causal/causal-extractor.js";
-import { getSheepIntegration } from "../integration/moltbot-bridge.js";
-import { SheepDatabase } from "../memory/database.js";
-import { now } from "../memory/schema.js";
 
-// biome-ignore lint/suspicious/noExplicitAny: TypeBox schema type variance
-type AnyAgentTool = AgentTool<any, unknown>;
+// =============================================================================
+// HELPERS
+// =============================================================================
 
-/**
- * Helper to create JSON tool results (same pattern as agents/tools/common.ts)
- */
 function jsonResult(payload: unknown): AgentToolResult<unknown> {
-  return {
-    content: [
-      {
-        type: "text",
-        text: JSON.stringify(payload, null, 2),
-      },
-    ],
-    details: payload,
-  };
+  return { content: payload };
 }
 
-/**
- * Helper to read string params
- */
 function readStringParam(params: unknown, key: string): string | undefined {
   if (!params || typeof params !== "object") return undefined;
   const value = (params as Record<string, unknown>)[key];
@@ -66,9 +57,6 @@ function readStringParam(params: unknown, key: string): string | undefined {
   return undefined;
 }
 
-/**
- * Helper to read number params
- */
 function readNumberParam(params: unknown, key: string): number | undefined {
   if (!params || typeof params !== "object") return undefined;
   const value = (params as Record<string, unknown>)[key];
@@ -82,9 +70,7 @@ function readNumberParam(params: unknown, key: string): number | undefined {
 
 const SheepRememberSchema = Type.Object({
   subject: Type.String({ description: "The entity this fact is about (e.g., 'user', 'project')" }),
-  predicate: Type.String({
-    description: "The relationship (e.g., 'prefers', 'works_at', 'likes')",
-  }),
+  predicate: Type.String({ description: "The relationship (e.g., 'prefers', 'works_at', 'likes')" }),
   object: Type.String({ description: "The value (e.g., 'TypeScript', 'Acme Corp')" }),
   confidence: Type.Optional(
     Type.Number({ description: "Confidence 0-1 (default: 0.9 for explicit statements)" }),
@@ -100,9 +86,7 @@ const SheepRecallSchema = Type.Object({
 });
 
 const SheepWhySchema = Type.Object({
-  effect: Type.String({
-    description: "The effect/outcome to explain (e.g., 'user switched to Opus')",
-  }),
+  effect: Type.String({ description: "The effect/outcome to explain" }),
   maxDepth: Type.Optional(Type.Number({ description: "Maximum causal chain depth (default: 5)" })),
 });
 
@@ -125,35 +109,13 @@ const SheepCorrectSchema = Type.Object({
 // TOOL IMPLEMENTATIONS
 // =============================================================================
 
-/**
- * Create the sheep_remember tool
- * Allows the agent to explicitly store a fact
- */
-export function createSheepRememberTool(options: {
-  config?: OpenClawConfig;
-  agentSessionKey?: string;
-}): AnyAgentTool | null {
-  const cfg = options.config;
-  if (!cfg) return null;
-
-  let agentId = resolveSessionAgentId({
-    sessionKey: options.agentSessionKey,
-    config: cfg,
-  });
-
-  // BUGFIX: Force consistent agentId to ensure sheep_remember and sheep_recall
-  // use the same database. This should be fixed properly by investigating
-  // why resolveSessionAgentId returns different values.
-  agentId = "main";
-  console.log(`[SHEEP DEBUG] sheep_remember tool using agentId="${agentId}" (forced to main)`);
-
+export function createSheepRememberTool(): AnyAgentTool {
   return {
-    label: "SHEEP Remember",
     name: "sheep_remember",
     description:
-      "Store a fact in cognitive memory. Use when the user explicitly states something important about themselves, their preferences, or their work that should be remembered.",
-    parameters: SheepRememberSchema,
-    execute: async (_toolCallId, params) => {
+      "Store a fact in cognitive memory. Use when the user explicitly states something important about themselves, their preferences, or their work.",
+    inputSchema: SheepRememberSchema,
+    execute: async (params) => {
       const subject = readStringParam(params, "subject");
       const predicate = readStringParam(params, "predicate");
       const object = readStringParam(params, "object");
@@ -164,22 +126,26 @@ export function createSheepRememberTool(options: {
       }
 
       try {
-        // Use integration to ensure fact goes to the same DB as sheep_recall
-        // and is added to search indexes
-        console.log(`[SHEEP DEBUG] sheep_remember EXECUTE with agentId="${agentId}"`);
-        const integration = getSheepIntegration(agentId, cfg);
+        const agentId = resolveSessionAgentId();
+        const db = new SheepDatabase(agentId);
+        const timestamp = now();
 
-        const result = await integration.storeFact({
+        const fact = db.insertFact({
           subject,
-          predicate,
+          predicate: predicate.toLowerCase().replace(/\s+/g, "_"),
           object,
           confidence,
-          userAffirmed: true, // Explicitly stated = user affirmed
+          evidence: ["user_explicit"],
+          firstSeen: timestamp,
+          lastConfirmed: timestamp,
+          userAffirmed: true,
         });
 
+        db.close();
+
         return jsonResult({
-          success: result.success,
-          factId: result.id,
+          success: true,
+          factId: fact.id,
           stored: `${subject} ${predicate} ${object}`,
           confidence,
         });
@@ -191,35 +157,13 @@ export function createSheepRememberTool(options: {
   };
 }
 
-/**
- * Create the sheep_recall tool
- * Allows the agent to query cognitive memory
- */
-export function createSheepRecallTool(options: {
-  config?: OpenClawConfig;
-  agentSessionKey?: string;
-}): AnyAgentTool | null {
-  const cfg = options.config;
-  if (!cfg) return null;
-
-  let agentId = resolveSessionAgentId({
-    sessionKey: options.agentSessionKey,
-    config: cfg,
-  });
-
-  // BUGFIX: Force consistent agentId to ensure sheep_remember and sheep_recall
-  // use the same database. This should be fixed properly by investigating
-  // why resolveSessionAgentId returns different values.
-  agentId = "main";
-  console.log(`[SHEEP DEBUG] sheep_recall tool using agentId="${agentId}" (forced to main)`);
-
+export function createSheepRecallTool(): AnyAgentTool {
   return {
-    label: "SHEEP Recall",
     name: "sheep_recall",
     description:
       "Search cognitive memory for relevant facts and episodes. Use when you need to remember something about the user, their preferences, past conversations, or context.",
-    parameters: SheepRecallSchema,
-    execute: async (_toolCallId, params) => {
+    inputSchema: SheepRecallSchema,
+    execute: async (params) => {
       const query = readStringParam(params, "query");
       const type = readStringParam(params, "type") ?? "all";
       const limit = readNumberParam(params, "limit") ?? 10;
@@ -229,41 +173,35 @@ export function createSheepRecallTool(options: {
       }
 
       try {
-        // Use semantic search via SheepIntegration (masterplan TODO 0.8.1)
-        console.log(
-          `[SHEEP DEBUG] sheep_recall EXECUTE with agentId="${agentId}", query="${query}"`,
-        );
-        const integration = getSheepIntegration(agentId, cfg);
+        const agentId = resolveSessionAgentId();
+        const db = new SheepDatabase(agentId);
 
-        // Determine which memory types to search
-        const searchTypes: Array<"fact" | "episode"> = [];
-        if (type === "all" || type === "facts") searchTypes.push("fact");
-        if (type === "all" || type === "episodes") searchTypes.push("episode");
+        // Simple keyword-based recall from facts
+        const queryWords = query.toLowerCase().split(/\s+/).filter((w) => w.length > 2);
+        const allFacts = (type === "all" || type === "facts")
+          ? db.findFacts({ activeOnly: true })
+          : [];
 
-        // Perform semantic search (not keyword matching!)
-        const searchResults = await integration.searchMemories(query, {
-          types: searchTypes,
-          limit,
-          minSimilarity: 0.3,
-        });
+        const matchedFacts = allFacts
+          .map((f) => {
+            const text = `${f.subject} ${f.predicate} ${f.object}`.toLowerCase();
+            const score = queryWords.filter((w) => text.includes(w)).length;
+            return { fact: f, score };
+          })
+          .filter((r) => r.score > 0)
+          .sort((a, b) => b.score - a.score)
+          .slice(0, limit)
+          .map((r) => ({
+            id: r.fact.id,
+            fact: `${r.fact.subject} ${r.fact.predicate.replace(/_/g, " ")} ${r.fact.object}`,
+            confidence: r.fact.confidence,
+          }));
 
-        // Format results
-        const results: { facts: unknown[]; episodes: unknown[] } = {
-          facts: searchResults.facts.map((f) => ({
-            id: f.id,
-            fact: `${f.subject} ${f.predicate.replace(/_/g, " ")} ${f.object}`,
-            confidence: f.confidence,
-            userAffirmed: f.userAffirmed,
-          })),
-          episodes: searchResults.episodes.map((e) => ({
-            id: e.id,
-            summary: e.summary,
-            topic: e.topic,
-            timestamp: e.timestamp,
-          })),
-        };
+        const episodes: Array<{ id: string; summary: string; topic: string; timestamp: string }> = [];
 
-        return jsonResult(results);
+        db.close();
+
+        return jsonResult({ facts: matchedFacts, episodes });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         return jsonResult({ facts: [], episodes: [], error: message });
@@ -272,29 +210,13 @@ export function createSheepRecallTool(options: {
   };
 }
 
-/**
- * Create the sheep_why tool
- * Allows the agent to query causal chains using semantic search
- */
-export function createSheepWhyTool(options: {
-  config?: OpenClawConfig;
-  agentSessionKey?: string;
-}): AnyAgentTool | null {
-  const cfg = options.config;
-  if (!cfg) return null;
-
-  const agentId = resolveSessionAgentId({
-    sessionKey: options.agentSessionKey,
-    config: cfg,
-  });
-
+export function createSheepWhyTool(): AnyAgentTool {
   return {
-    label: "SHEEP Why",
     name: "sheep_why",
     description:
-      "Query causal reasoning: why did something happen? Uses semantic search to find relevant cause-effect chains in memory.",
-    parameters: SheepWhySchema,
-    execute: async (_toolCallId, params) => {
+      "Query causal reasoning: why did something happen? Finds cause-effect chains in memory.",
+    inputSchema: SheepWhySchema,
+    execute: async (params) => {
       const effect = readStringParam(params, "effect");
       const maxDepth = readNumberParam(params, "maxDepth") ?? 5;
 
@@ -303,51 +225,23 @@ export function createSheepWhyTool(options: {
       }
 
       try {
-        // Use SheepIntegration for semantic search capability
-        const integration = getSheepIntegration(agentId, cfg);
+        const agentId = resolveSessionAgentId();
+        const db = new SheepDatabase(agentId);
+        const allLinks = db.findCausalLinks({});
+        db.close();
 
-        // First, search for causal links semantically related to the effect
-        const relevantLinks = await integration.searchCausalLinksByEffect(effect, 50);
-
-        if (relevantLinks.length === 0) {
-          // Fall back to getting all links from DB
-          const db = new SheepDatabase(agentId);
-          const allLinks = db.findCausalLinks({});
-          db.close();
-
-          if (allLinks.length === 0) {
-            return jsonResult({
-              effect,
-              chain: [],
-              totalConfidence: 0,
-              explanation: `No causal relationships found in memory.`,
-            });
-          }
-
-          // Build chain using fuzzy text similarity for better matching
-          const chainResult = buildCausalChain(allLinks, effect, {
-            maxDepth,
-            minSimilarity: 0.1, // Very low threshold for broad matching
-          });
-
+        if (allLinks.length === 0) {
           return jsonResult({
             effect,
-            chain: chainResult.chain.map((link) => ({
-              cause: link.causeDescription,
-              effect: link.effectDescription,
-              mechanism: link.mechanism,
-              confidence: link.confidence,
-            })),
-            totalConfidence: chainResult.totalConfidence,
-            explanation: chainResult.explanation,
+            chain: [],
+            totalConfidence: 0,
+            explanation: "No causal relationships found in memory.",
           });
         }
 
-        // Semantic search already filtered for relevance - use very low threshold
-        // to avoid double-filtering. The semantic search did the heavy lifting.
-        const chainResult = buildCausalChain(relevantLinks, effect, {
+        const chainResult = buildCausalChain(allLinks, effect, {
           maxDepth,
-          minSimilarity: 0.05, // Very low - trust semantic search results
+          minSimilarity: 0.1,
         });
 
         return jsonResult({
@@ -369,29 +263,13 @@ export function createSheepWhyTool(options: {
   };
 }
 
-/**
- * Create the sheep_forget tool
- * Allows the agent to request forgetting specific information
- */
-export function createSheepForgetTool(options: {
-  config?: OpenClawConfig;
-  agentSessionKey?: string;
-}): AnyAgentTool | null {
-  const cfg = options.config;
-  if (!cfg) return null;
-
-  const agentId = resolveSessionAgentId({
-    sessionKey: options.agentSessionKey,
-    config: cfg,
-  });
-
+export function createSheepForgetTool(): AnyAgentTool {
   return {
-    label: "SHEEP Forget",
     name: "sheep_forget",
     description:
-      "Request to forget specific information from memory. Use when the user asks to forget something or when information is confirmed to be incorrect/outdated.",
-    parameters: SheepForgetSchema,
-    execute: async (_toolCallId, params) => {
+      "Request to forget specific information from memory. Use when the user asks to forget something or when information is incorrect/outdated.",
+    inputSchema: SheepForgetSchema,
+    execute: async (params) => {
       const factId = readStringParam(params, "factId");
       const subject = readStringParam(params, "subject");
       const predicate = readStringParam(params, "predicate");
@@ -402,15 +280,14 @@ export function createSheepForgetTool(options: {
       }
 
       try {
+        const agentId = resolveSessionAgentId();
         const db = new SheepDatabase(agentId);
         let forgotten = 0;
 
         if (factId) {
-          // Forget specific fact by ID
           db.retractFact(factId, reason);
           forgotten = 1;
         } else if (subject || predicate) {
-          // Forget facts matching criteria
           const facts = db.findFacts({ subject, predicate, activeOnly: true });
           for (const fact of facts) {
             db.retractFact(fact.id, reason);
@@ -419,12 +296,7 @@ export function createSheepForgetTool(options: {
         }
 
         db.close();
-
-        return jsonResult({
-          success: true,
-          forgotten,
-          reason,
-        });
+        return jsonResult({ success: true, forgotten, reason });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         return jsonResult({ success: false, error: message });
@@ -433,29 +305,13 @@ export function createSheepForgetTool(options: {
   };
 }
 
-/**
- * Create the sheep_correct tool
- * Allows the agent to correct a stored fact
- */
-export function createSheepCorrectTool(options: {
-  config?: OpenClawConfig;
-  agentSessionKey?: string;
-}): AnyAgentTool | null {
-  const cfg = options.config;
-  if (!cfg) return null;
-
-  const agentId = resolveSessionAgentId({
-    sessionKey: options.agentSessionKey,
-    config: cfg,
-  });
-
+export function createSheepCorrectTool(): AnyAgentTool {
   return {
-    label: "SHEEP Correct",
     name: "sheep_correct",
     description:
       "Correct a fact in memory. Use when the user provides updated information that supersedes a previously stored fact.",
-    parameters: SheepCorrectSchema,
-    execute: async (_toolCallId, params) => {
+    inputSchema: SheepCorrectSchema,
+    execute: async (params) => {
       const subject = readStringParam(params, "subject");
       const predicate = readStringParam(params, "predicate");
       const oldValue = readStringParam(params, "oldValue");
@@ -467,10 +323,10 @@ export function createSheepCorrectTool(options: {
       }
 
       try {
+        const agentId = resolveSessionAgentId();
         const db = new SheepDatabase(agentId);
         const normalizedPredicate = predicate.toLowerCase().replace(/\s+/g, "_");
 
-        // Find and retract the old fact
         const oldFacts = db.findFacts({
           subject,
           predicate: normalizedPredicate,
@@ -482,14 +338,13 @@ export function createSheepCorrectTool(options: {
           db.retractFact(oldFact.id, `Corrected: ${reason}`);
         }
 
-        // Insert the corrected fact
         const timestamp = now();
         const newFact = db.insertFact({
           subject,
           predicate: normalizedPredicate,
           object: newValue,
-          confidence: 0.95, // High confidence for corrections
-          evidence: oldFacts.map((f) => f.id), // Link to old fact as evidence
+          confidence: 0.95,
+          evidence: oldFacts.map((f) => f.id),
           firstSeen: timestamp,
           lastConfirmed: timestamp,
           userAffirmed: true,
@@ -515,29 +370,12 @@ export function createSheepCorrectTool(options: {
 // TOOL COLLECTION
 // =============================================================================
 
-/**
- * Create all SHEEP memory tools
- */
-export function createSheepMemoryTools(options: {
-  config?: OpenClawConfig;
-  agentSessionKey?: string;
-}): AnyAgentTool[] {
-  const tools: AnyAgentTool[] = [];
-
-  const remember = createSheepRememberTool(options);
-  if (remember) tools.push(remember);
-
-  const recall = createSheepRecallTool(options);
-  if (recall) tools.push(recall);
-
-  const why = createSheepWhyTool(options);
-  if (why) tools.push(why);
-
-  const forget = createSheepForgetTool(options);
-  if (forget) tools.push(forget);
-
-  const correct = createSheepCorrectTool(options);
-  if (correct) tools.push(correct);
-
-  return tools;
+export function createSheepMemoryTools(): AnyAgentTool[] {
+  return [
+    createSheepRememberTool(),
+    createSheepRecallTool(),
+    createSheepWhyTool(),
+    createSheepForgetTool(),
+    createSheepCorrectTool(),
+  ];
 }

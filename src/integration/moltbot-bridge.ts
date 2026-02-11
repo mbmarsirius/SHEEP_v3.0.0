@@ -224,7 +224,7 @@ export class SheepIntegration {
     try {
       const recentEpisodes = this.db.queryEpisodes({ limit: 10 });
       const recentFacts = this.db.findFacts({ activeOnly: true, limit: 20 });
-      const stats = this.db.getMemoryStats();
+      const stats = this.db.getStats();
       
       log.info("SHEEP waking up - loaded recent memories", {
         episodes: recentEpisodes.length,

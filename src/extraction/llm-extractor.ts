@@ -293,6 +293,9 @@ CRITICAL: Output ONLY valid JSON. No markdown, no explanations, no text before o
 13. SOCIAL EVENTS: Meetups, gatherings, dinners, parties — include WHO and WHEN
 14. HOBBIES & INTERESTS: What they do, how long they've done it, what they collect/create
 15. TEMPORAL FACTS: Dates, deadlines, durations — preserve as spoken
+16. EMOTIONAL STATES: Stress, frustration, excitement, burnout, happiness — include WHAT caused them
+17. SUBJECTIVE OPINIONS: "user loves/hates X", "user thinks X is terrible", strong feelings about tools/processes
+18. PROBLEM STATES: Current bugs, blockers, issues being debugged — include suspected causes
 
 ## CRITICAL: EVERY activity/event/plan MUST include its timing in the object field
 BAD:  "Melanie | enjoys | camping" (no timing = useless for "when" questions)
@@ -321,9 +324,10 @@ GOOD: "Melanie | ran_charity_race | last Saturday"
 4. Object = specific and concrete - NO PRONOUNS
 5. RESOLVE coreferences: "he" → actual name, "it" → actual entity
 6. Confidence: 0.9+ explicit, 0.75+ implied, 0.60+ inferred. Below 0.60: skip.
-7. LIMIT: 50-80 facts per chunk. Be EXHAUSTIVE.
-8. Extract EVERY piece of personal information mentioned.
+7. LIMIT: 3-10 facts per short conversation (< 5 messages). 10-15 for longer ones. Be PRECISE, not exhaustive.
+8. QUALITY OVER QUANTITY: Every fact must pass this test: "Would this be useful to remember months from now?"
 9. MULTI-SPEAKER: Extract facts about ALL speakers, not just the primary one.
+10. DO NOT extract multiple facts that say the same thing in different ways.
 
 ## CRITICAL: LIST EXPLOSION — extract EVERY item separately
 When someone mentions multiple items, extract EACH ONE as its own fact:
@@ -383,6 +387,18 @@ For temporal references, preserve the exact words used in conversation:
 - incident | root_cause | certificate expired (incident details)
 - v1 API | deprecation_date | 2025-04-01T00:00:00 (future events - ABSOLUTE timestamp, NOT "Q2 next year")
 
+## Examples of GOOD emotional/problem extractions:
+- user | feeling | stressed about the release deadline (emotional state)
+- user | feeling | frustrated with production bug (emotional state)
+- user | feeling | excited about new project (emotional state)
+- user | state | burned out from 60-hour weeks (emotional state)
+- user | considering | taking a leave (decision/intention)
+- release | status | 2 days behind schedule (project state)
+- API | issue | failing under load (problem detail)
+- bug | occurs_in | production only (problem scope)
+- bug | suspected_cause | race condition (diagnosis)
+- client | feeling | impatient about delays (stakeholder state)
+
 ## Examples of BAD extractions (skip these):
 - user | asked | about databases (trivial conversational)
 - assistant | explained | the issue (meta about the conversation)
@@ -392,27 +408,37 @@ For temporal references, preserve the exact words used in conversation:
 - he | works_at | TechCorp (❌ PRONOUN - must resolve to: "Martin Mark | works_at | TechCorp")
 
 ## When to extract ZERO facts:
-- If the conversation is PURELY about cause-and-effect reasoning (e.g., "X happened because Y")
-- If the conversation is about a problem and solution with NO user/project/team facts
-- If no concrete, persistent information about user/project/team is stated
-- If everything is too vague or temporary to be worth remembering
+- If the conversation is PURELY small talk with no personal information (e.g., "hi how are you", "nice weather")
+- If no concrete information about user/project/team/problems is stated
+- NOTE: Emotional states (stressed, frustrated, excited) ARE worth extracting
+- NOTE: Problem descriptions (API failing, bug in production) ARE worth extracting
+- NOTE: Decisions and considerations (thinking about quitting, considering a change) ARE worth extracting
 
 ## CRITICAL - Cause-Effect Conversations:
 In conversations focused on WHY something happened:
 
-**EXTRACT these facts:**
+**EXTRACT these facts (persistent, useful later):**
 - Technology/tool adoption: "project | uses | GraphQL"
 - Persistent configurations: "team | uses | microservices"
-- Named solutions that are REUSABLE: "solution | was | add caching layer"
 
-**DO NOT extract these as facts:**
-- Problem descriptions: "deployment | had_issue | failed" ❌
+**EXTRACT these emotional/problem facts when they describe CURRENT USER STATE:**
+- Emotional states: "user | feeling | stressed about release deadline" ✅
+- Bug descriptions with diagnosis: "bug | suspected_cause | race condition" ✅
+- Project statuses: "release | status | 2 days behind schedule" ✅
+- Decisions/considerations: "user | considering | taking a leave" ✅
+
+**DO NOT extract (let causal links handle these):**
+- One-off events: "deployment | status | failed" ❌ (use causal link instead)
 - Temporary states: "system | was | down" ❌
-- Symptoms: "app | experienced | slowness" ❌
+- Actions taken to fix: "user | added | env variable" ❌ (ephemeral action)
+- Meta conversational: "user | asked | about databases" ❌
+- Restating the problem: "API | experienced | slowness" ❌ (captured in causal link)
 
-**The key question:** Would this fact be useful to remember OUTSIDE this conversation?
-- "project uses GraphQL" → YES, extract
-- "deployment failed" → NO, that's context for the causal link, not a standalone fact
+**The key question:** Would this fact be useful to remember MONTHS from now?
+- "project uses GraphQL" → YES
+- "user feeling stressed about deadline" → YES (emotional context)
+- "deployment failed" → NO (one-off event, use causal link)
+- "added env variable to fix it" → NO (ephemeral action)
 
 ## CRITICAL OUTPUT REQUIREMENTS:
 - Output ONLY valid JSON. NO markdown, NO explanations, NO text before or after.
@@ -513,18 +539,20 @@ Conversation:
 
 const CAUSAL_EXTRACTION_PROMPT = `Extract cause-effect relationships from this conversation.
 
-ONLY EXTRACT when there is EXPLICIT causal language like:
-- "because", "due to", "so", "which is why", "that's why"
-- Clear preference reasons with explicit problems stated
+Extract when there is EXPLICIT or STRONGLY IMPLIED causal language:
+- Explicit: "because", "due to", "so", "which is why", "that's why", "caused", "led to"
+- Implicit but clear: "X is failing... I've been debugging for 12 hours" (X causes debugging)
+- Emotional: "I'm stressed about X" (X causes stress), "burned out from Y" (Y causes burnout)
 
 PATTERNS:
 1. Explicit preferences: "prefers X because Y" → cause: Y, effect: prefers X
 2. Explicit switches: "switched to X because Y" → cause: Y, effect: switched to X  
 3. Explicit blockers: "waiting on X" → cause: X pending, effect: Y blocked
 4. Explicit problems: "X is slow/bad, so we did Y" → cause: X being slow, effect: did Y
+5. Emotional causes: "stressed about X" → cause: X, effect: user stressed
+6. Chained effects: "X failed → Y happened → Z resulted" → extract both X→Y and Y→Z
 
 DO NOT EXTRACT:
-- Implied causation without explicit causal words
 - Long-term habits without stated reason ("I use vim for 10 years" - no explicit why)
 - Simple preferences without stated cause ("I prefer Go" - no explicit why given)
 
@@ -547,7 +575,7 @@ OUTPUT JSON:
   ]
 }
 
-Extract 0-2 links MAX. Prefer fewer, higher quality links. Empty array [] if no explicit causal relationship.
+Extract 0-3 links MAX. Prefer fewer, higher quality links. Empty array [] if no explicit causal relationship.
 
 Conversation:
 `;
@@ -674,10 +702,9 @@ export function parseJSONResponse<T>(response: string): T | null {
 /**
  * Minimum confidence threshold for extracted facts.
  * Facts below this threshold are filtered out to improve precision.
- * V12: Lowered to 0.60 to improve recall while maintaining acceptable precision.
- * Target: 85%+ F1 on HaluMem benchmark.
+ * V13: Raised to 0.65 to improve precision. Recall is already 95%+.
  */
-const FACT_CONFIDENCE_THRESHOLD = 0.6;
+const FACT_CONFIDENCE_THRESHOLD = 0.65;
 
 /**
  * Check if two facts are duplicates (same subject-predicate-object, case-insensitive)
@@ -726,7 +753,7 @@ export async function extractFactsWithLLM(
   // Handle extraction mode options
   const primaryOnly = options?.primaryOnly ?? false;
   const minConfidence = options?.minConfidence ?? (primaryOnly ? 0.85 : FACT_CONFIDENCE_THRESHOLD);
-  const maxFacts = options?.maxFacts ?? (primaryOnly ? 10 : 50);
+  const maxFacts = options?.maxFacts ?? (primaryOnly ? 10 : 15);
   const conversationDate = options?.conversationDate;
 
   // Select prompt based on mode
@@ -1036,8 +1063,8 @@ export async function extractCausalLinksWithLLM(
     return { ...link, cause, effect };
   });
 
-  // Allow up to 2 causal links per conversation (prefer quality over quantity)
-  const limitedLinks = resolvedLinks.slice(0, 2);
+  // Allow up to 3 causal links per conversation (prefer quality over quantity)
+  const limitedLinks = resolvedLinks.slice(0, 3);
 
   return limitedLinks.map((link) => ({
     causeType: "episode" as const,

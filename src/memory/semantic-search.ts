@@ -513,20 +513,18 @@ export class SemanticMemoryIndex {
     // Auto-retry with exponential backoff (max 3 attempts)
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
-        return await this.embeddingProvider.embedQuery(text);
+        const embedFn = this.embeddingProvider!.embedQuery ?? this.embeddingProvider!.embed;
+        return await embedFn.call(this.embeddingProvider, text);
       } catch (err) {
         const errorMsg = err instanceof Error ? err.message : String(err);
         const isTokenLimit = errorMsg.includes("500") || errorMsg.includes("token") || errorMsg.includes("limit");
         
-        // If it's a token limit error and not the last attempt, retry with delay
         if (isTokenLimit && attempt < 2) {
-          const delay = Math.min(1000 * Math.pow(2, attempt), 5000); // 1s, 2s, 4s
+          const delay = Math.min(1000 * Math.pow(2, attempt), 5000);
           console.warn(`[SHEEP] Embedding query failed (attempt ${attempt + 1}/3), retrying in ${delay}ms...`);
           await new Promise((resolve) => setTimeout(resolve, delay));
           continue;
         }
-        
-        // If not retryable or last attempt, log and return zero vector
         console.warn(`[SHEEP] Embedding generation failed for query: ${errorMsg.slice(0, 100)}`);
         // Return a zero vector as fallback (will result in low similarity scores)
         // Dimension should match the embedding model (typically 1536 for text-embedding-3-small)
@@ -551,25 +549,27 @@ export class SemanticMemoryIndex {
     // Auto-retry with exponential backoff (max 3 attempts)
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
-        return await this.embeddingProvider.embedBatch(texts);
+        const batchFn = this.embeddingProvider!.embedBatch;
+        if (!batchFn) throw new Error("embedBatch not available");
+        return await batchFn.call(this.embeddingProvider, texts);
       } catch (err) {
         const errorMsg = err instanceof Error ? err.message : String(err);
         const isTokenLimit = errorMsg.includes("500") || errorMsg.includes("token") || errorMsg.includes("limit");
         
-        // If it's a token limit error and not the last attempt, try smaller batches
         if (isTokenLimit && attempt < 2) {
-          const delay = Math.min(1000 * Math.pow(2, attempt), 5000); // 1s, 2s, 4s
-          console.warn(`[SHEEP] Batch embedding failed (${texts.length} texts, attempt ${attempt + 1}/3), retrying with smaller batches in ${delay}ms...`);
+          const delay = Math.min(1000 * Math.pow(2, attempt), 5000);
+          console.warn(`[SHEEP] Batch embedding failed (${texts.length} texts, attempt ${attempt + 1}/3), retrying in ${delay}ms...`);
           await new Promise((resolve) => setTimeout(resolve, delay));
           
-          // Fallback: process with smaller batches
           const results: number[][] = [];
-          const smallBatchSize = Math.max(4, Math.floor(texts.length / (attempt + 2))); // Progressively smaller
+          const smallBatchSize = Math.max(4, Math.floor(texts.length / (attempt + 2)));
           
           for (let i = 0; i < texts.length; i += smallBatchSize) {
             const smallBatch = texts.slice(i, i + smallBatchSize);
             try {
-              const batchResults = await this.embeddingProvider.embedBatch(smallBatch);
+              const fn = this.embeddingProvider!.embedBatch;
+              if (!fn) throw new Error("embedBatch not available");
+              const batchResults = await fn.call(this.embeddingProvider, smallBatch);
               results.push(...batchResults);
             } catch (smallErr) {
               // If even small batch fails, use zero vectors
@@ -595,10 +595,11 @@ export class SemanticMemoryIndex {
     for (let i = 0; i < texts.length; i += smallBatchSize) {
       const smallBatch = texts.slice(i, i + smallBatchSize);
       try {
-        const batchResults = await this.embeddingProvider.embedBatch(smallBatch);
+        const fn = this.embeddingProvider!.embedBatch;
+        if (!fn) throw new Error("embedBatch not available");
+        const batchResults = await fn.call(this.embeddingProvider, smallBatch);
         results.push(...batchResults);
       } catch (smallErr) {
-        // If even small batch fails, use zero vectors
         console.warn(`[SHEEP] Small batch embedding failed: ${String(smallErr).slice(0, 100)}`);
         const zeroVector = new Array(1536).fill(0);
         results.push(...smallBatch.map(() => zeroVector));

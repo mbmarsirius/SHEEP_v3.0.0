@@ -78,7 +78,7 @@ router.get("/status", (_req, res) => {
 
   try {
     const db = new SheepDatabase(agentId);
-    const stats = db.getMemoryStats();
+    const stats = db.getStats();
     const sampleFacts = db.findFacts({ activeOnly: true, limit: 5 });
     const sampleEpisodes = db.queryEpisodes({ limit: 3 });
     db.close();

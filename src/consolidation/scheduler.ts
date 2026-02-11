@@ -12,7 +12,11 @@
 
 import type { OpenClawConfig } from "../stubs/config.js";
 import { createSubsystemLogger } from "../stubs/logging.js";
-import { getIdleAgents } from "../integration/moltbot-bridge.js";
+// Standalone: no Moltbot dependency. Returns all configured agents.
+function getIdleAgents(_idleThresholdMs: number): string[] {
+  const agentId = process.env.SHEEP_AGENT_ID ?? process.env.AGENT_ID ?? "default";
+  return [agentId];
+}
 import { runConsolidation, type ConsolidationResult } from "./consolidator.js";
 
 const log = createSubsystemLogger("sheep");

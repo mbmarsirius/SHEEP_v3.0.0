@@ -591,7 +591,74 @@ CREATE INDEX IF NOT EXISTS idx_sheep_core_memories_importance_category ON sheep_
   // ===========================================================================
 
   /**
-   * Insert a new fact
+   * Normalize SPO for deduplication (lowercase, trim)
+   */
+  private static normalizeSpo(subject: string, predicate: string, object: string): string {
+    return `${(subject || "").toLowerCase().trim()}|${(predicate || "").toLowerCase().trim()}|${(object || "").toLowerCase().trim()}`;
+  }
+
+  /**
+   * Find existing fact with same or highly similar (subject, predicate, object).
+   * Returns existing fact if similarity >= 0.9, else null.
+   */
+  findDuplicateFact(
+    subject: string,
+    predicate: string,
+    object: string,
+    minSimilarity = 0.9,
+  ): Fact | null {
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM sheep_facts WHERE is_active = 1 AND (
+        LOWER(TRIM(subject)) = ? AND LOWER(TRIM(predicate)) = ? AND LOWER(TRIM(object)) = ?
+      )`,
+      )
+      .all(
+        subject.toLowerCase().trim(),
+        predicate.toLowerCase().trim(),
+        object.toLowerCase().trim(),
+      ) as Record<string, unknown>[];
+    if (rows.length > 0) {
+      return this.rowToFact(rows[0]);
+    }
+    const bySubject = this.db
+      .prepare(
+        `SELECT * FROM sheep_facts WHERE is_active = 1 AND LOWER(TRIM(subject)) = ? LIMIT 50`,
+      )
+      .all(subject.toLowerCase().trim()) as Record<string, unknown>[];
+    for (const row of bySubject) {
+      const f = this.rowToFact(row);
+      const sim = this.spoSimilarity(subject, predicate, object, f.subject, f.predicate, f.object);
+      if (sim >= minSimilarity) return f;
+    }
+    return null;
+  }
+
+  private spoSimilarity(
+    s1: string,
+    p1: string,
+    o1: string,
+    s2: string,
+    p2: string,
+    o2: string,
+  ): number {
+    const tok = (a: string, b: string) => {
+      const an = (a || "").toLowerCase().trim();
+      const bn = (b || "").toLowerCase().trim();
+      if (an === bn) return 1;
+      if (an.includes(bn) || bn.includes(an)) return 0.95;
+      const aw = new Set(an.split(/\s+/).filter(Boolean));
+      const bw = new Set(bn.split(/\s+/).filter(Boolean));
+      const inter = [...aw].filter((w) => bw.has(w)).length;
+      const union = new Set([...aw, ...bw]).size;
+      return union > 0 ? inter / union : 0;
+    };
+    return (tok(s1, s2) * 0.2 + tok(p1, p2) * 0.3 + tok(o1, o2) * 0.5);
+  }
+
+  /**
+   * Insert a new fact. If duplicate (same SPO, similarity >= 0.9) exists,
+   * updates confidence/timestamp and returns existing fact instead of inserting.
    */
   insertFact(
     fact: Omit<
@@ -599,6 +666,33 @@ CREATE INDEX IF NOT EXISTS idx_sheep_core_memories_importance_category ON sheep_
       "id" | "createdAt" | "updatedAt" | "accessCount" | "isActive" | "contradictions"
     >,
   ): Fact {
+    const existing = this.findDuplicateFact(
+      fact.subject,
+      fact.predicate,
+      fact.object,
+      0.9,
+    );
+    if (existing) {
+      const newConfidence = Math.max(existing.confidence, fact.confidence);
+      const mergedEvidence = [...new Set([...existing.evidence, ...fact.evidence])].slice(0, 10);
+      this.db
+        .prepare(
+          `
+        UPDATE sheep_facts SET
+          confidence = ?, last_confirmed = ?, evidence = ?, updated_at = ?
+        WHERE id = ?
+      `,
+        )
+        .run(
+          newConfidence,
+          now(),
+          JSON.stringify(mergedEvidence),
+          now(),
+          existing.id,
+        );
+      return { ...existing, confidence: newConfidence, evidence: mergedEvidence, lastConfirmed: now(), updatedAt: now() };
+    }
+
     const id = generateId("fact");
     const timestamp = now();
     const full: Fact = {
@@ -1187,9 +1281,9 @@ CREATE INDEX IF NOT EXISTS idx_sheep_core_memories_importance_category ON sheep_
         // The "new_value" at that time is what we want
         const historicalValue = retractChanges.new_value as string;
         try {
-          const parsed = safeJSONParse(historicalValue, null);
-          if (parsed.object) fact.object = parsed.object;
-          if (parsed.confidence) fact.confidence = parsed.confidence;
+          const parsed = safeJSONParse(historicalValue, null) as Record<string, unknown> | null;
+          if (parsed?.object) fact.object = parsed.object as string;
+          if (parsed?.confidence) fact.confidence = parsed.confidence as number;
         } catch {
           // If parse fails, use current value
         }
@@ -1291,13 +1385,13 @@ CREATE INDEX IF NOT EXISTS idx_sheep_core_memories_importance_category ON sheep_
           });
         } else if (change.changeType === "modify") {
           try {
-            const newVal = safeJSONParse(change.newValue, null);
+            const newVal = safeJSONParse(change.newValue, null) as Record<string, unknown> | null;
             timeline.push({
               timestamp: change.createdAt,
               factId: fact.id,
               predicate: fact.predicate,
-              value: newVal.object ?? fact.object,
-              confidence: newVal.confidence ?? fact.confidence,
+              value: (newVal?.object as string) ?? fact.object,
+              confidence: (newVal?.confidence as number) ?? fact.confidence,
               changeType: "updated",
               reason: change.reason,
             });
@@ -2137,7 +2231,7 @@ CREATE INDEX IF NOT EXISTS idx_sheep_core_memories_importance_category ON sheep_
     sourceEpisodeId?: string;
     userId: string;
   }): string {
-    const id = generateId("foresight");
+    const id = generateId("fact"); // foresight uses fact prefix
     this.db
       .prepare(
         `INSERT INTO sheep_foresights (id, description, evidence, start_time, end_time, duration_days, confidence, source_episode_id, user_id, is_active, created_at)

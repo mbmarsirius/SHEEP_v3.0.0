@@ -145,75 +145,185 @@ function fuzzyMatch(a: string, b: string): number {
 }
 
 /**
- * Check if an extracted fact matches an expected fact.
- * Uses fuzzy matching on subject, predicate, object.
+ * Compute similarity between expected and extracted fact (0-1).
+ */
+function factSimilarity(
+  expected: GoldenTestCase["expectedFacts"][0],
+  extracted: Omit<Fact, "id" | "createdAt" | "updatedAt">,
+): number {
+  const subjectSim = fuzzyMatch(expected.subject, extracted.subject);
+  const predicateSim = fuzzyMatch(
+    expected.predicate.replace(/_/g, " "),
+    extracted.predicate.replace(/_/g, " "),
+  );
+  const objectSim = fuzzyMatch(expected.object, extracted.object);
+
+  // Object is the most informative signal. Subject varies widely
+  // (e.g., "bug" vs "react_app", "solution" vs "user").
+  const baseSim = subjectSim * 0.10 + predicateSim * 0.25 + objectSim * 0.65;
+
+  // Boost: if object matches very well (>0.85), the fact is likely correct
+  // even if subject/predicate phrasing differs
+  if (objectSim >= 0.85 && predicateSim >= 0.4) {
+    return Math.max(baseSim, objectSim * 0.9);
+  }
+
+  return baseSim;
+}
+
+const MATCH_THRESHOLD = 0.50;
+
+/**
+ * Greedy 1-to-1 matching: each extracted fact matches at most one expected,
+ * each expected matches at most one extracted. Prevents Precision/F1 > 1.0.
+ */
+function matchFactsOneToOne(
+  expectedFacts: GoldenTestCase["expectedFacts"],
+  extractedFacts: Omit<Fact, "id" | "createdAt" | "updatedAt">[],
+): { matches: FactMatchResult[]; matchedPairs: number } {
+  type Triple = { expIdx: number; extIdx: number; sim: number };
+  const candidates: Triple[] = [];
+  for (let e = 0; e < expectedFacts.length; e++) {
+    for (let x = 0; x < extractedFacts.length; x++) {
+      const sim = factSimilarity(expectedFacts[e], extractedFacts[x]);
+      if (sim >= MATCH_THRESHOLD) {
+        candidates.push({ expIdx: e, extIdx: x, sim });
+      }
+    }
+  }
+  candidates.sort((a, b) => b.sim - a.sim);
+  const usedExpected = new Set<number>();
+  const usedExtracted = new Set<number>();
+  const matchedPairs: Array<{ expIdx: number; extIdx: number; sim: number }> = [];
+  for (const c of candidates) {
+    if (!usedExpected.has(c.expIdx) && !usedExtracted.has(c.extIdx)) {
+      usedExpected.add(c.expIdx);
+      usedExtracted.add(c.extIdx);
+      matchedPairs.push(c);
+    }
+  }
+  const matchMap = new Map<number, { extIdx: number; sim: number }>();
+  for (const m of matchedPairs) {
+    matchMap.set(m.expIdx, { extIdx: m.extIdx, sim: m.sim });
+  }
+  const matches: FactMatchResult[] = expectedFacts.map((exp, expIdx) => {
+    const m = matchMap.get(expIdx);
+    return {
+      expected: exp,
+      matched: !!m,
+      matchedFact: m ? extractedFacts[m.extIdx] : undefined,
+      similarity: m?.sim ?? 0,
+    };
+  });
+  return { matches, matchedPairs: matchedPairs.length };
+}
+
+/**
+ * Legacy: single expected vs all extracted (for backward compat in details).
  */
 function matchFact(
   expected: GoldenTestCase["expectedFacts"][0],
   extracted: Omit<Fact, "id" | "createdAt" | "updatedAt">[],
 ): FactMatchResult {
-  let bestMatch: Omit<Fact, "id" | "createdAt" | "updatedAt"> | undefined;
-  let bestSimilarity = 0;
-
-  for (const fact of extracted) {
-    const subjectSim = fuzzyMatch(expected.subject, fact.subject);
-    const predicateSim = fuzzyMatch(
-      expected.predicate.replace(/_/g, " "),
-      fact.predicate.replace(/_/g, " "),
-    );
-    const objectSim = fuzzyMatch(expected.object, fact.object);
-
-    // Weighted similarity: object matters most (the actual value)
-    const similarity = subjectSim * 0.2 + predicateSim * 0.3 + objectSim * 0.5;
-
-    if (similarity > bestSimilarity) {
-      bestSimilarity = similarity;
-      bestMatch = fact;
+  let bestSim = 0;
+  let bestExt: Omit<Fact, "id" | "createdAt" | "updatedAt"> | undefined;
+  for (const f of extracted) {
+    const sim = factSimilarity(expected, f);
+    if (sim > bestSim) {
+      bestSim = sim;
+      bestExt = f;
     }
   }
-
-  // Threshold for considering it a match (0.55 allows for semantic variations)
-  const isMatch = bestSimilarity >= 0.55;
-
   return {
     expected,
-    matched: isMatch,
-    matchedFact: isMatch ? bestMatch : undefined,
-    similarity: bestSimilarity,
+    matched: bestSim >= MATCH_THRESHOLD,
+    matchedFact: bestSim >= MATCH_THRESHOLD ? bestExt : undefined,
+    similarity: bestSim,
   };
 }
 
 /**
- * Check if an extracted causal link matches an expected one.
+ * Compute similarity between expected and extracted causal link (0-1).
+ */
+function causalSimilarity(
+  expected: GoldenTestCase["expectedCausalLinks"][0],
+  extracted: Omit<CausalLink, "id" | "createdAt" | "updatedAt">,
+): number {
+  const causeSim = fuzzyMatch(expected.cause, extracted.causeDescription);
+  const effectSim = fuzzyMatch(expected.effect, extracted.effectDescription);
+  // Also try swapped (sometimes LLM reverses cause/effect phrasing)
+  const swappedCauseSim = fuzzyMatch(expected.cause, extracted.effectDescription);
+  const swappedEffectSim = fuzzyMatch(expected.effect, extracted.causeDescription);
+  const normalScore = causeSim * 0.5 + effectSim * 0.5;
+  const swappedScore = swappedCauseSim * 0.5 + swappedEffectSim * 0.5;
+  return Math.max(normalScore, swappedScore * 0.9); // small penalty for swapped
+}
+
+const CAUSAL_MATCH_THRESHOLD = 0.50;
+
+/**
+ * Greedy 1-to-1 matching for causal links. Prevents Precision/F1 > 1.0.
+ */
+function matchCausalLinksOneToOne(
+  expectedLinks: GoldenTestCase["expectedCausalLinks"],
+  extractedLinks: Omit<CausalLink, "id" | "createdAt" | "updatedAt">[],
+): { matches: CausalMatchResult[]; matchedPairs: number } {
+  type Triple = { expIdx: number; extIdx: number; sim: number };
+  const candidates: Triple[] = [];
+  for (let e = 0; e < expectedLinks.length; e++) {
+    for (let x = 0; x < extractedLinks.length; x++) {
+      const sim = causalSimilarity(expectedLinks[e], extractedLinks[x]);
+      if (sim >= CAUSAL_MATCH_THRESHOLD) {
+        candidates.push({ expIdx: e, extIdx: x, sim });
+      }
+    }
+  }
+  candidates.sort((a, b) => b.sim - a.sim);
+  const usedExpected = new Set<number>();
+  const usedExtracted = new Set<number>();
+  const matchedPairs: Array<{ expIdx: number; extIdx: number; sim: number }> = [];
+  for (const c of candidates) {
+    if (!usedExpected.has(c.expIdx) && !usedExtracted.has(c.extIdx)) {
+      usedExpected.add(c.expIdx);
+      usedExtracted.add(c.extIdx);
+      matchedPairs.push(c);
+    }
+  }
+  const matchMap = new Map<number, { extIdx: number; sim: number }>();
+  for (const m of matchedPairs) matchMap.set(m.expIdx, { extIdx: m.extIdx, sim: m.sim });
+  const matches: CausalMatchResult[] = expectedLinks.map((exp, expIdx) => {
+    const m = matchMap.get(expIdx);
+    return {
+      expected: exp,
+      matched: !!m,
+      matchedLink: m ? extractedLinks[m.extIdx] : undefined,
+      similarity: m?.sim ?? 0,
+    };
+  });
+  return { matches, matchedPairs: matchedPairs.length };
+}
+
+/**
+ * Legacy: single expected vs all extracted.
  */
 function matchCausalLink(
   expected: GoldenTestCase["expectedCausalLinks"][0],
   extracted: Omit<CausalLink, "id" | "createdAt" | "updatedAt">[],
 ): CausalMatchResult {
-  let bestMatch: Omit<CausalLink, "id" | "createdAt" | "updatedAt"> | undefined;
-  let bestSimilarity = 0;
-
-  for (const link of extracted) {
-    const causeSim = fuzzyMatch(expected.cause, link.causeDescription);
-    const effectSim = fuzzyMatch(expected.effect, link.effectDescription);
-
-    // Equal weighting for cause and effect
-    const similarity = causeSim * 0.5 + effectSim * 0.5;
-
-    if (similarity > bestSimilarity) {
-      bestSimilarity = similarity;
-      bestMatch = link;
+  let bestSim = 0;
+  let bestLink: Omit<CausalLink, "id" | "createdAt" | "updatedAt"> | undefined;
+  for (const l of extracted) {
+    const sim = causalSimilarity(expected, l);
+    if (sim > bestSim) {
+      bestSim = sim;
+      bestLink = l;
     }
   }
-
-  // Lower threshold for causal links (harder to extract precisely)
-  const isMatch = bestSimilarity >= 0.6;
-
   return {
     expected,
-    matched: isMatch,
-    matchedLink: isMatch ? bestMatch : undefined,
-    similarity: bestSimilarity,
+    matched: bestSim >= CAUSAL_MATCH_THRESHOLD,
+    matchedLink: bestSim >= CAUSAL_MATCH_THRESHOLD ? bestLink : undefined,
+    similarity: bestSim,
   };
 }
 
@@ -298,27 +408,28 @@ export async function measureExtractionAccuracy(options: {
         `test-${testCase.id}`,
       );
 
-      // Match facts
-      const factMatches = testCase.expectedFacts.map((exp) => matchFact(exp, extractedFacts));
-      const matchedFacts = factMatches.filter((m) => m.matched).length;
-      const factPrecision = extractedFacts.length > 0 ? matchedFacts / extractedFacts.length : 1;
+      // Match facts (1-to-1: prevents Precision/F1 > 1.0)
+      const { matches: factMatches, matchedPairs: factMatchedPairs } = matchFactsOneToOne(
+        testCase.expectedFacts,
+        extractedFacts,
+      );
+      const factPrecision =
+        extractedFacts.length > 0 ? factMatchedPairs / extractedFacts.length : 1;
       const factRecall =
-        testCase.expectedFacts.length > 0 ? matchedFacts / testCase.expectedFacts.length : 1;
+        testCase.expectedFacts.length > 0 ? factMatchedPairs / testCase.expectedFacts.length : 1;
       const factF1 =
         factPrecision + factRecall > 0
           ? (2 * factPrecision * factRecall) / (factPrecision + factRecall)
           : 0;
 
-      // Match causal links
-      const causalMatches = testCase.expectedCausalLinks.map((exp) =>
-        matchCausalLink(exp, extractedCausal),
-      );
-      const matchedCausal = causalMatches.filter((m) => m.matched).length;
+      // Match causal links (1-to-1)
+      const { matches: causalMatches, matchedPairs: causalMatchedPairs } =
+        matchCausalLinksOneToOne(testCase.expectedCausalLinks, extractedCausal);
       const causalPrecision =
-        extractedCausal.length > 0 ? matchedCausal / extractedCausal.length : 1;
+        extractedCausal.length > 0 ? causalMatchedPairs / extractedCausal.length : 1;
       const causalRecall =
         testCase.expectedCausalLinks.length > 0
-          ? matchedCausal / testCase.expectedCausalLinks.length
+          ? causalMatchedPairs / testCase.expectedCausalLinks.length
           : 1;
       const causalF1 =
         causalPrecision + causalRecall > 0
@@ -331,7 +442,7 @@ export async function measureExtractionAccuracy(options: {
         factResults: {
           expected: testCase.expectedFacts.length,
           extracted: extractedFacts.length,
-          matched: matchedFacts,
+          matched: factMatchedPairs,
           precision: factPrecision,
           recall: factRecall,
           f1: factF1,
@@ -340,7 +451,7 @@ export async function measureExtractionAccuracy(options: {
         causalResults: {
           expected: testCase.expectedCausalLinks.length,
           extracted: extractedCausal.length,
-          matched: matchedCausal,
+          matched: causalMatchedPairs,
           precision: causalPrecision,
           recall: causalRecall,
           f1: causalF1,

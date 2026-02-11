@@ -1,24 +1,24 @@
 {
-  "name": "sheep-ai",
-  "version": "0.3.0",
-  "description": "SHEEP AI - Sleep-based Hierarchical Emergent Entity Protocol. Cognitive memory system with causal reasoning, topic clustering, and predictive recall.",
+  "name": "@sheep-ai/core",
+  "version": "1.0.0",
+  "description": "Cognitive memory system for AI agents. Extracts facts and causal relationships, consolidates during sleep cycles, recalls with reasoning.",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "build": "tsc",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage",
     "lint": "tsc --noEmit",
     "clean": "rm -rf dist",
-    "validate": "tsc && node dist/scripts/self-validate.js",
-    "validate:dev": "npx tsx src/scripts/self-validate.ts",
-    "start": "npx tsx src/main.ts",
-    "start:prod": "tsc && node dist/main.js",
-    "bot": "npx tsx src/main.ts",
-    "cloud": "npx tsx src/cloud/server.ts",
-    "cloud:prod": "node dist/cloud/server.js"
+    "proof": "npx tsx src/scripts/proof-test.ts",
+    "proof:full": "SHEEP_PROOF_LIMIT=55 npx tsx src/scripts/proof-test.ts",
+    "proof:recall": "npx tsx src/scripts/proof-recall.ts"
   },
   "keywords": [
     "ai",
@@ -27,23 +27,24 @@
     "causal-reasoning",
     "episodic-memory",
     "semantic-memory",
-    "clustering",
-    "llm"
+    "llm",
+    "agent",
+    "fact-extraction"
   ],
   "author": "Marsirius AI Labs",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sheep-ai/core"
+  },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.74.0",
     "@google/generative-ai": "^0.24.1",
     "@sinclair/typebox": "^0.34.0",
-    "express": "^5.2.1",
-    "grammy": "^1.40.0",
     "openai": "^6.20.0",
-    "stripe": "^20.3.1",
     "zod": "^4.3.6"
   },
   "devDependencies": {
-    "@types/express": "^5.0.6",
     "@vitest/coverage-v8": "^3.0.0",
     "typescript": "^5.7.0",
     "vitest": "^3.0.0"

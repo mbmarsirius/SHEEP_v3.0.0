@@ -31,7 +31,7 @@ export type GoldenTestCase = {
   /** Expected episode summary keywords */
   expectedKeywords: string[];
   /** Test category for reporting */
-  category: "user_info" | "preferences" | "work" | "technical" | "causal" | "temporal";
+  category: "user_info" | "preferences" | "work" | "technical" | "causal" | "temporal" | "emotional" | "multi_session";
 };
 
 // =============================================================================
@@ -65,6 +65,7 @@ User: About 5 years now. Moved here for the job.`,
       { subject: "user", predicate: "lives_in", object: "San Francisco", required: true },
       { subject: "user", predicate: "from", object: "Seattle", required: true },
       { subject: "user", predicate: "time_in_sf", object: "5 years", required: false },
+      { subject: "user", predicate: "moved_for", object: "job", required: false },
     ],
     expectedCausalLinks: [
       { cause: "job opportunity", effect: "moved to San Francisco", required: false },
@@ -82,6 +83,9 @@ User: Yes, Emma is in second grade and Jake just started preschool.`,
       { subject: "user", predicate: "has_child", object: "Jake", required: true },
       { subject: "Emma", predicate: "age", object: "7", required: true },
       { subject: "Jake", predicate: "age", object: "4", required: true },
+      { subject: "Emma", predicate: "grade", object: "second grade", required: false },
+      { subject: "Jake", predicate: "school", object: "preschool", required: false },
+      { subject: "user", predicate: "number_of_children", object: "2", required: false },
     ],
     expectedCausalLinks: [],
     expectedKeywords: ["kids", "Emma", "Jake", "school"],
@@ -116,6 +120,7 @@ User: Not really, maybe just dinner with family.`,
       { subject: "user", predicate: "age", object: "34", required: true },
       { subject: "user", predicate: "birthday", object: "March 15", required: true },
       { subject: "user", predicate: "zodiac", object: "Pisces", required: false },
+      { subject: "user", predicate: "celebration", object: "dinner with family", required: false },
     ],
     expectedCausalLinks: [],
     expectedKeywords: ["birthday", "age", "March"],
@@ -153,6 +158,7 @@ User: We switched to Linear last month and it's so much better.`,
     expectedFacts: [
       { subject: "user", predicate: "dislikes", object: "Jira", required: true },
       { subject: "user", predicate: "uses", object: "Linear", required: true },
+      { subject: "user", predicate: "switched_from", object: "Jira to Linear", required: false },
     ],
     expectedCausalLinks: [
       { cause: "Jira being slow and clunky", effect: "switched to Linear", required: true },
@@ -169,6 +175,7 @@ User: Yeah, I use vim-fugitive for git and fzf for fuzzy finding.`,
       { subject: "user", predicate: "uses", object: "vim", required: true },
       { subject: "user", predicate: "uses", object: "vim-fugitive", required: true },
       { subject: "user", predicate: "uses", object: "fzf", required: true },
+      { subject: "user", predicate: "vim_experience", object: "10 years", required: false },
     ],
     expectedCausalLinks: [],
     expectedKeywords: ["vim", "plugins", "fugitive", "fzf"],
@@ -222,6 +229,89 @@ User: Yes, I prefer Go or Rust where the structure is more explicit.`,
     expectedCausalLinks: [],
     expectedKeywords: ["Python", "whitespace", "Go", "Rust"],
     category: "preferences",
+  },
+
+  // ===== EMOTIONAL (stress, excitement, frustration) =====
+  {
+    id: "emo-001",
+    conversation: `User: I'm so stressed about the release. We're 2 days behind and the client is getting impatient.
+Assistant: That sounds really tough. What's the main blocker?
+User: The API keeps failing under load. I've been debugging for 12 hours straight.`,
+    expectedFacts: [
+      { subject: "user", predicate: "feeling", object: "stressed", required: true },
+      { subject: "release", predicate: "status", object: "2 days behind", required: true },
+      { subject: "client", predicate: "feeling", object: "impatient", required: false },
+      { subject: "API", predicate: "issue", object: "failing under load", required: true },
+    ],
+    expectedCausalLinks: [
+      { cause: "release delay", effect: "client impatience", required: false },
+      { cause: "API failures", effect: "stress and long debugging", required: true },
+    ],
+    expectedKeywords: ["stressed", "release", "API", "debugging"],
+    category: "emotional",
+  },
+  {
+    id: "emo-002",
+    conversation: `User: I just got the promotion! I've been working toward this for 3 years!
+Assistant: Congratulations! That's amazing news.
+User: I can't believe it. My manager said I was the top performer on the team.`,
+    expectedFacts: [
+      { subject: "user", predicate: "got", object: "promotion", required: true },
+      { subject: "user", predicate: "worked_toward", object: "promotion for 3 years", required: false },
+      { subject: "user", predicate: "ranked", object: "top performer", required: true },
+    ],
+    expectedCausalLinks: [
+      { cause: "top performer ranking", effect: "got promotion", required: true },
+    ],
+    expectedKeywords: ["promotion", "3 years", "top performer"],
+    category: "emotional",
+  },
+  {
+    id: "emo-003",
+    conversation: `User: I'm so frustrated with this bug. It only happens in production and I can't reproduce it locally.
+Assistant: Intermittent production bugs are the worst. Any leads?
+User: I think it's a race condition. We added logging and should see it in the next deploy.`,
+    expectedFacts: [
+      { subject: "user", predicate: "feeling", object: "frustrated", required: true },
+      { subject: "bug", predicate: "occurs_in", object: "production only", required: true },
+      { subject: "bug", predicate: "suspected_cause", object: "race condition", required: true },
+    ],
+    expectedCausalLinks: [
+      { cause: "race condition", effect: "intermittent production bug", required: true },
+    ],
+    expectedKeywords: ["frustrated", "bug", "production", "race condition"],
+    category: "emotional",
+  },
+  {
+    id: "emo-004",
+    conversation: `User: I'm really excited about the new project. We're building something no one has done before.
+Assistant: Innovation is thrilling! What makes it unique?
+User: We're combining quantum computing with ML for real-time optimization. The team is incredible.`,
+    expectedFacts: [
+      { subject: "user", predicate: "feeling", object: "excited", required: true },
+      { subject: "project", predicate: "novelty", object: "no one has done before", required: false },
+      { subject: "project", predicate: "uses", object: "quantum computing and ML", required: true },
+      { subject: "team", predicate: "quality", object: "incredible", required: false },
+    ],
+    expectedCausalLinks: [],
+    expectedKeywords: ["excited", "quantum", "ML", "optimization"],
+    category: "emotional",
+  },
+  {
+    id: "emo-005",
+    conversation: `User: I'm burned out. Three weeks of 60-hour weeks and the deadline got moved up again.
+Assistant: That's unsustainable. Have you talked to your manager?
+User: I tried. They said everyone is in the same boat. I'm considering taking a leave.`,
+    expectedFacts: [
+      { subject: "user", predicate: "state", object: "burned out", required: true },
+      { subject: "user", predicate: "worked", object: "60 hours per week for 3 weeks", required: true },
+      { subject: "user", predicate: "considering", object: "taking a leave", required: true },
+    ],
+    expectedCausalLinks: [
+      { cause: "60-hour weeks and moved deadline", effect: "burnout", required: true },
+    ],
+    expectedKeywords: ["burned out", "deadline", "leave"],
+    category: "emotional",
   },
 
   // ===== WORK/PROJECTS =====
@@ -335,6 +425,8 @@ User: Good point. I added an index on user_id and the query went from 2s to 50ms
     expectedFacts: [
       { subject: "database", predicate: "had_issue", object: "full table scan", required: false },
       { subject: "solution", predicate: "was", object: "add index on user_id", required: true },
+      { subject: "query", predicate: "original_time", object: "2 seconds", required: false },
+      { subject: "query", predicate: "optimized_time", object: "50ms", required: false },
     ],
     expectedCausalLinks: [
       {
@@ -360,6 +452,7 @@ User: Yeah, I added a rate limiter with exponential backoff and it fixed the iss
         object: "rate limiter with exponential backoff",
         required: true,
       },
+      { subject: "project", predicate: "had_issue", object: "rate limited by OpenAI", required: false },
     ],
     expectedCausalLinks: [
       { cause: "too many requests", effect: "rate limited by OpenAI API", required: true },
@@ -551,7 +644,9 @@ User: Almost 5 seconds. The main bundle was 3MB, now it loads on demand.`,
     conversation: `User: Our error rate spiked because of a bad deploy.
 Assistant: Did you roll back?
 User: Yes, rolled back immediately and the errors stopped. Found a null pointer bug.`,
-    expectedFacts: [],
+    expectedFacts: [
+      { subject: "bug", predicate: "type", object: "null pointer", required: false },
+    ],
     expectedCausalLinks: [
       { cause: "bad deploy", effect: "error rate spiked", required: true },
       { cause: "null pointer bug", effect: "errors in production", required: true },
@@ -878,7 +973,215 @@ User: Yes, we're actually migrating to GKE next month. The pricing is 30% cheape
       { cause: "GKE pricing is 30% cheaper", effect: "chose GKE over EKS", required: true },
     ],
     expectedKeywords: ["AWS", "GCP", "GKE", "EKS", "migration", "pricing"],
-    category: "work",
+    category: "multi_session",
+  },
+  {
+    id: "multi-003",
+    conversation: `User: Remember when we discussed the auth refactor last week?
+Assistant: Yes, you were going to switch from JWT to sessions.
+User: Right. I finished it yesterday. The session store is Redis now, like we decided.`,
+    expectedFacts: [
+      { subject: "user", predicate: "discussed", object: "auth refactor last week", required: true },
+      { subject: "auth", predicate: "changed_from", object: "JWT to sessions", required: true },
+      { subject: "session_store", predicate: "is", object: "Redis", required: true },
+    ],
+    expectedCausalLinks: [
+      { cause: "previous discussion", effect: "implemented Redis session store", required: false },
+    ],
+    expectedKeywords: ["auth", "JWT", "sessions", "Redis"],
+    category: "multi_session",
+  },
+
+  // ===== NEGATIVE TESTS (should extract 0 facts) =====
+  {
+    id: "neg-001",
+    conversation: `User: Hey, how's it going?
+Assistant: I'm doing well! How can I help you today?
+User: Nothing specific, just saying hi.
+Assistant: That's nice! Feel free to reach out whenever you need anything.
+User: Thanks, will do. Have a good day!`,
+    expectedFacts: [],
+    expectedCausalLinks: [],
+    expectedKeywords: [],
+    category: "user_info",
+  },
+  {
+    id: "neg-002",
+    conversation: `User: Nice weather today, isn't it?
+Assistant: It depends on where you are! What's it like where you are?
+User: Pretty sunny. Anyway, I was just making conversation.
+Assistant: No problem! Let me know if you need help with anything.
+User: Sure thing, bye!`,
+    expectedFacts: [],
+    expectedCausalLinks: [],
+    expectedKeywords: [],
+    category: "user_info",
+  },
+  {
+    id: "neg-003",
+    conversation: `User: Can you help me with something?
+Assistant: Of course! What do you need?
+User: Actually, never mind. I figured it out.
+Assistant: Great! Glad you got it sorted.
+User: Yeah, it was simpler than I thought. Thanks anyway.`,
+    expectedFacts: [],
+    expectedCausalLinks: [],
+    expectedKeywords: [],
+    category: "user_info",
+  },
+
+  // ===== CAUSAL REASONING (rich, 2-3 links each) =====
+  {
+    id: "causal-rich-001",
+    conversation: `User: I switched to TypeScript because JavaScript had too many runtime bugs.
+Assistant: That's a common reason. How's it been?
+User: Much better. The compiler catches most errors before they hit production, which saved us a week of debugging last month.`,
+    expectedFacts: [
+      { subject: "user", predicate: "uses", object: "TypeScript", required: true },
+    ],
+    expectedCausalLinks: [
+      { cause: "JavaScript runtime bugs", effect: "switched to TypeScript", required: true },
+      { cause: "TypeScript compiler catches errors", effect: "saved a week of debugging", required: true },
+    ],
+    expectedKeywords: ["TypeScript", "JavaScript", "bugs", "compiler"],
+    category: "causal",
+  },
+  {
+    id: "causal-rich-002",
+    conversation: `User: The server crashed which caused us to lose the demo with the client.
+Assistant: That's terrible. What happened?
+User: A memory leak in the WebSocket handler. We didn't have proper connection cleanup, so connections piled up until the server ran out of memory.`,
+    expectedFacts: [
+      { subject: "server_crash", predicate: "cause", object: "memory leak in WebSocket handler", required: true },
+    ],
+    expectedCausalLinks: [
+      { cause: "memory leak in WebSocket handler", effect: "server crashed", required: true },
+      { cause: "server crash", effect: "lost the demo with client", required: true },
+      { cause: "no connection cleanup", effect: "connections piled up and out of memory", required: false },
+    ],
+    expectedKeywords: ["server", "crash", "demo", "memory leak", "WebSocket"],
+    category: "causal",
+  },
+  {
+    id: "causal-rich-003",
+    conversation: `User: After reading the distributed systems paper, I decided to change our architecture from monolith to microservices.
+Assistant: That's a big decision. How did the team react?
+User: They were skeptical at first, but after seeing the independent deployment benefits, they got on board quickly.`,
+    expectedFacts: [
+      { subject: "team", predicate: "architecture", object: "microservices", required: true },
+    ],
+    expectedCausalLinks: [
+      { cause: "reading distributed systems paper", effect: "decided to change to microservices", required: true },
+      { cause: "independent deployment benefits", effect: "team accepted microservices", required: true },
+    ],
+    expectedKeywords: ["architecture", "microservices", "monolith", "paper"],
+    category: "causal",
+  },
+  {
+    id: "causal-rich-004",
+    conversation: `User: We adopted Kubernetes because our Docker Compose setup couldn't handle the scaling requirements.
+Assistant: Makes sense for scaling. Any challenges?
+User: The learning curve was steep, which slowed our velocity for about 2 months. But now deployments are 5x faster.`,
+    expectedFacts: [
+      { subject: "team", predicate: "uses", object: "Kubernetes", required: true },
+    ],
+    expectedCausalLinks: [
+      { cause: "Docker Compose couldn't handle scaling", effect: "adopted Kubernetes", required: true },
+      { cause: "Kubernetes learning curve", effect: "slowed velocity for 2 months", required: true },
+    ],
+    expectedKeywords: ["Kubernetes", "Docker Compose", "scaling", "learning curve"],
+    category: "causal",
+  },
+  {
+    id: "causal-rich-005",
+    conversation: `User: The database kept timing out because we had N+1 queries everywhere.
+Assistant: Classic ORM problem. How did you fix it?
+User: We added eager loading and batched queries. Response times dropped from 8 seconds to 200ms, so users stopped complaining.`,
+    expectedFacts: [],
+    expectedCausalLinks: [
+      { cause: "N+1 queries", effect: "database kept timing out", required: true },
+      { cause: "added eager loading and batched queries", effect: "response times dropped from 8s to 200ms", required: true },
+      { cause: "faster response times", effect: "users stopped complaining", required: false },
+    ],
+    expectedKeywords: ["database", "N+1", "eager loading", "timeout"],
+    category: "causal",
+  },
+  {
+    id: "causal-rich-006",
+    conversation: `User: I quit my last job because the burnout was unbearable. 80-hour weeks with no recognition.
+Assistant: That sounds really tough. How are things now?
+User: Much better. The new company has a 4-day work week, which has completely changed my mental health.`,
+    expectedFacts: [
+      { subject: "user", predicate: "left_previous_job", object: "due to burnout", required: true },
+      { subject: "user", predicate: "current_company", object: "has 4-day work week", required: false },
+    ],
+    expectedCausalLinks: [
+      { cause: "80-hour weeks with no recognition", effect: "burnout and quit job", required: true },
+      { cause: "4-day work week", effect: "improved mental health", required: true },
+    ],
+    expectedKeywords: ["burnout", "quit", "4-day", "mental health"],
+    category: "causal",
+  },
+  {
+    id: "causal-rich-007",
+    conversation: `User: We moved from MySQL to PostgreSQL because we needed better JSON support for our API.
+Assistant: PostgreSQL's JSONB is excellent. Any migration issues?
+User: The migration took 3 weeks, which delayed our Q1 release. But the query performance on JSON data improved by 10x.`,
+    expectedFacts: [
+      { subject: "team", predicate: "uses", object: "PostgreSQL", required: true },
+      { subject: "team", predicate: "previous_database", object: "MySQL", required: false },
+    ],
+    expectedCausalLinks: [
+      { cause: "needed better JSON support", effect: "moved from MySQL to PostgreSQL", required: true },
+      { cause: "migration took 3 weeks", effect: "delayed Q1 release", required: true },
+    ],
+    expectedKeywords: ["MySQL", "PostgreSQL", "JSON", "migration"],
+    category: "causal",
+  },
+  {
+    id: "causal-rich-008",
+    conversation: `User: Our CI was failing randomly because of flaky tests. It destroyed developer trust in the pipeline.
+Assistant: Flaky tests are a morale killer. What did you do?
+User: We quarantined the flaky tests and added retry logic. Now the pipeline is green 98% of the time, so developers actually look at failures.`,
+    expectedFacts: [],
+    expectedCausalLinks: [
+      { cause: "flaky tests", effect: "CI failing randomly", required: true },
+      { cause: "CI failing randomly", effect: "destroyed developer trust in pipeline", required: true },
+      { cause: "quarantined flaky tests and added retry", effect: "pipeline green 98% of time", required: true },
+    ],
+    expectedKeywords: ["CI", "flaky tests", "pipeline", "quarantine"],
+    category: "causal",
+  },
+  {
+    id: "causal-rich-009",
+    conversation: `User: The startup ran out of funding because we couldn't close the Series A in time.
+Assistant: That's really unfortunate. What happened to the team?
+User: Most people found jobs quickly since our tech was solid. The CTO got hired by Google, which validated our architecture.`,
+    expectedFacts: [
+      { subject: "startup", predicate: "status", object: "ran out of funding", required: true },
+    ],
+    expectedCausalLinks: [
+      { cause: "couldn't close Series A in time", effect: "startup ran out of funding", required: true },
+      { cause: "solid tech and architecture", effect: "team found jobs quickly", required: true },
+    ],
+    expectedKeywords: ["startup", "funding", "Series A", "hired"],
+    category: "causal",
+  },
+  {
+    id: "causal-rich-010",
+    conversation: `User: We switched from Slack to Discord because Slack's pricing got ridiculous for our team size.
+Assistant: Discord for work is getting more popular. How did the team adapt?
+User: The transition was rough for a week since everyone had muscle memory for Slack. But the unlimited history sold everyone.`,
+    expectedFacts: [
+      { subject: "team", predicate: "uses", object: "Discord", required: true },
+      { subject: "team", predicate: "previous_tool", object: "Slack", required: false },
+    ],
+    expectedCausalLinks: [
+      { cause: "Slack pricing too high for team size", effect: "switched to Discord", required: true },
+      { cause: "unlimited message history", effect: "team accepted Discord", required: true },
+    ],
+    expectedKeywords: ["Slack", "Discord", "pricing", "history"],
+    category: "causal",
   },
 ];
 
@@ -893,6 +1196,8 @@ export const DATASET_CATEGORIES = [
   "technical",
   "causal",
   "temporal",
+  "emotional",
+  "multi_session",
 ] as const;
 
 export type DatasetCategory = (typeof DATASET_CATEGORIES)[number];

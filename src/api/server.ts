@@ -1135,7 +1135,7 @@ app.get("/recall", async (req: Request<{}, {}, {}, RecallRequest>, res: Response
       // DYNAMIC: Get real current status from database
       let dbStats = { totalFacts: 0, totalEpisodes: 0, totalCausalLinks: 0 };
       try {
-        dbStats = db.getMemoryStats();
+        dbStats = db.getStats();
       } catch (err) {
         // Fallback if DB query fails
         console.warn("Failed to get DB stats:", err);

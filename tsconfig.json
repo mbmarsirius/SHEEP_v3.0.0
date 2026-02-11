@@ -17,5 +17,24 @@
     "noUnusedParameters": false
   },
   "include": ["src/**/*.ts"],
-  "exclude": ["node_modules", "dist", "**/*.test.ts"]
+  "exclude": [
+    "node_modules",
+    "dist",
+    "**/*.test.ts",
+    "src/telegram/**",
+    "src/cloud/**",
+    "src/federation/**",
+    "src/license/**",
+    "src/cli/**",
+    "src/tests/**",
+    "src/scripts/**",
+    "src/main.ts",
+    "src/api/**",
+    "src/integration/**",
+    "src/retrieval/vector-search.ts",
+    "src/retrieval/embeddings.ts",
+    "src/retrieval/agentic-retrieval.ts",
+    "src/retrieval/multihop-chain.ts",
+    "src/retrieval/hybrid-retrieval.ts"
+  ]
 }

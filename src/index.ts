@@ -1,13 +1,13 @@
 /**
  * SHEEP AI - Sleep-based Hierarchical Emergent Entity Protocol
  *
- * A breakthrough cognitive memory system for AI agents that:
- * - Sleeps and consolidates memories like human brains
- * - Remembers causally - knows not just WHAT but WHY
- * - Predicts memory needs before you ask
- * - (Future) Federates wisdom with other SHEEP AI instances
+ * A cognitive memory system for AI agents that:
+ * - Extracts facts and causal relationships from conversations
+ * - Consolidates memories during sleep-like cycles
+ * - Retrieves memories with causal reasoning
+ * - Complies with GDPR/privacy requirements
  *
- * @module sheep
+ * @module @sheep-ai/core
  */
 
 // Memory module - schemas and database
@@ -28,14 +28,11 @@ export * from "./consolidation/index.js";
 // Prefetch module - predictive memory loading
 export * from "./prefetch/index.js";
 
-// Integration module - connects SHEEP to Moltbot
-export * from "./integration/index.js";
-
-// Tools module - agent tools
-export * from "./tools/index.js";
-
-// Privacy module - GDPR/HIPAA compliance (OPEN SOURCE)
+// Privacy module - GDPR/HIPAA compliance
 export * from "./privacy/index.js";
 
-// CLI module - command line interface
-// export * from "./cli/index.js";
+// Tools module - agent memory tools
+export * from "./tools/index.js";
+
+// Retrieval module - recall and query
+export * from "./retrieval/index.js";

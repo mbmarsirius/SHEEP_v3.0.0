@@ -45,7 +45,7 @@ async function main() {
 
   // Get full stats and sample facts
   const db = new SheepDatabase(agentId);
-  const stats = db.getMemoryStats();
+  const stats = db.getStats();
   const sampleFacts = db.findFacts({ activeOnly: true, limit: 10 });
   db.close();
 
@@ -56,6 +56,12 @@ async function main() {
   console.log(`Total procedures: ${stats.totalProcedures}`);
   console.log(`Average fact confidence: ${(stats.averageFactConfidence * 100).toFixed(1)}%`);
   console.log(`Last consolidation: ${stats.lastConsolidation ?? "never"}`);
+  if (stats.totalPreferences > 0 || stats.totalCoreMemories > 0 || stats.totalRelationships > 0) {
+    console.log("--- Extended (optional) ---");
+    if (stats.totalPreferences > 0) console.log(`Total preferences: ${stats.totalPreferences}`);
+    if (stats.totalCoreMemories > 0) console.log(`Total core memories: ${stats.totalCoreMemories}`);
+    if (stats.totalRelationships > 0) console.log(`Total relationships: ${stats.totalRelationships}`);
+  }
 
   // Sample facts for manual verification
 

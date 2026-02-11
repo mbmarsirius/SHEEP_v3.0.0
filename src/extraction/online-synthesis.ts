@@ -14,7 +14,7 @@ import type { Fact } from "../memory/schema.js";
 import type { LLMProvider } from "./llm-extractor.js";
 import { createSubsystemLogger } from "../stubs/logging.js";
 import { cosineSimilarity } from "../memory/semantic-search.js";
-import { generateFactEmbedding } from "../retrieval/embeddings.js";
+// generateFactEmbedding removed - using embed directly
 
 const log = createSubsystemLogger("sheep");
 
@@ -109,7 +109,7 @@ async function getFactEmbedding(
   // Generate if not found
   try {
     const text = `${fact.subject} ${fact.predicate} ${fact.object}`;
-    const embedding = await provider.embedQuery(text);
+    const embedding = await (provider.embedQuery ?? provider.embed).call(provider, text);
     return embedding;
   } catch (err) {
     log.warn("Failed to generate embedding for fact", {
@@ -141,7 +141,7 @@ async function findSimilarFacts(
   const newFactText = `${newFact.subject} ${newFact.predicate} ${newFact.object}`;
   let newEmbedding: number[];
   try {
-    newEmbedding = await provider.embedQuery(newFactText);
+    newEmbedding = await (provider.embedQuery ?? provider.embed).call(provider, newFactText);
   } catch (err) {
     log.warn("Failed to generate embedding for new fact", { error: String(err) });
     return [];

@@ -8,6 +8,8 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 
 export type EmbeddingProvider = {
   embed(text: string): Promise<number[]>;
+  /** Alias for embed() - used by some modules */
+  embedQuery?(text: string): Promise<number[]>;
   embedBatch?(texts: string[]): Promise<number[][]>;
   dimensions: number;
   name: string;
