@@ -1,5 +1,5 @@
 {
-  "name": "@sheep-ai/core",
+  "name": "sheep-ai-core",
   "version": "1.0.0",
   "description": "Cognitive memory system for AI agents. Extracts facts and causal relationships, consolidates during sleep cycles, recalls with reasoning.",
   "type": "module",
