@@ -359,6 +359,20 @@ export function startCloudTelegramBot(): Bot<CloudContext> | null {
     const userMessage = ctx.message.text;
     const chatId = String(ctx.chat.id);
 
+    // --- ONBOARDING: auto-trigger on first ever message ---
+    if (ctx.session.onboardingStep === "new") {
+      const chatId2 = String(ctx.chat.id);
+      getUserDatabase(chatId2); // ensure DB exists
+      ctx.session.onboardingStep = "ask_name";
+
+      await ctx.reply(
+        `Hey there! I'm Counting Sheep -- an AI that actually remembers you.\n\n` +
+        `Unlike other AIs that forget everything after each chat, I learn from our conversations and remember across sessions. The more we talk, the better I know you.\n\n` +
+        `Let's get started! What's your name?`,
+      );
+      return;
+    }
+
     // --- ONBOARDING: ask name ---
     if (ctx.session.onboardingStep === "ask_name") {
       const name = userMessage.trim();
