@@ -16,7 +16,9 @@
     "validate:dev": "npx tsx src/scripts/self-validate.ts",
     "start": "npx tsx src/main.ts",
     "start:prod": "tsc && node dist/main.js",
-    "bot": "npx tsx src/main.ts"
+    "bot": "npx tsx src/main.ts",
+    "cloud": "npx tsx src/cloud/server.ts",
+    "cloud:prod": "node dist/cloud/server.js"
   },
   "keywords": [
     "ai",
