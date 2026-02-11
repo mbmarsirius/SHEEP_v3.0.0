@@ -7,7 +7,7 @@
  * - Retrieves memories with causal reasoning
  * - Complies with GDPR/privacy requirements
  *
- * @module @sheep-ai/core
+ * @module sheep-ai-core
  */
 
 // Memory module - schemas and database
