@@ -9,13 +9,13 @@
  *   POST /v1/forget     -- Forget facts
  */
 
-import { Router } from "express";
+import { Router, type Router as IRouter } from "express";
 import type { AuthenticatedRequest } from "../middleware/api-key-auth.js";
 import { requireTier } from "../middleware/tier-gate.js";
 import { getUserDatabase } from "../db-manager.js";
 import { now } from "../../memory/schema.js";
 
-const router = Router();
+const router: IRouter = Router();
 
 // =============================================================================
 // POST /v1/remember -- Store a fact

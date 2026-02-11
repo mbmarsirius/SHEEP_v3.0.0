@@ -5,7 +5,7 @@
  * GET /v1/status  -- Authenticated memory stats (statusRouter, mounted under /v1)
  */
 
-import { Router } from "express";
+import { Router, type Router as IRouter } from "express";
 import type { AuthenticatedRequest } from "../middleware/api-key-auth.js";
 import { getUserDatabase, getActiveDbCount } from "../db-manager.js";
 
@@ -15,7 +15,7 @@ const startedAt = new Date().toISOString();
 // Public health check (mounted at app root)
 // =============================================================================
 
-export const healthRouter = Router();
+export const healthRouter: IRouter = Router();
 
 healthRouter.get("/health", (_req, res) => {
   res.json({
@@ -32,7 +32,7 @@ healthRouter.get("/health", (_req, res) => {
 // Authenticated status (mounted under /v1, after auth middleware)
 // =============================================================================
 
-export const statusRouter = Router();
+export const statusRouter: IRouter = Router();
 
 statusRouter.get("/status", (req: AuthenticatedRequest, res) => {
   try {

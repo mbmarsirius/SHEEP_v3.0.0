@@ -1799,22 +1799,23 @@ Answer:`;
         version: "0.3.0",
         error: "Response serialization failed",
       };
-        // Validate fallback JSON is valid
-        const fallbackJsonString = JSON.stringify(fallbackResponse);
-        try {
-          JSON.parse(fallbackJsonString);
-        } catch (parseErr) {
-          console.error(`[SHEEP] Fallback JSON is invalid: ${parseErr}`);
-          // Last resort: send minimal valid JSON
-          const minimalJson = '{"answer":"I am experiencing technical difficulties.","mode":"hybrid","factsUsed":0,"facts":[],"version":"0.3.0"}';
-          res.setHeader("Content-Type", "application/json; charset=utf-8");
-          res.setHeader("Content-Length", Buffer.byteLength(minimalJson, "utf-8").toString());
-          return res.send(minimalJson);
-        }
-        
+      // Validate fallback JSON is valid
+      const fallbackJsonString = JSON.stringify(fallbackResponse);
+      try {
+        JSON.parse(fallbackJsonString);
+      } catch (parseErr) {
+        console.error(`[SHEEP] Fallback JSON is invalid: ${parseErr}`);
+        // Last resort: send minimal valid JSON
+        const minimalJson = '{"answer":"I am experiencing technical difficulties.","mode":"hybrid","factsUsed":0,"facts":[],"version":"0.3.0"}';
         res.setHeader("Content-Type", "application/json; charset=utf-8");
-        res.setHeader("Content-Length", Buffer.byteLength(fallbackJsonString, "utf-8").toString());
-        res.json(fallbackResponse);
+        res.setHeader("Content-Length", Buffer.byteLength(minimalJson, "utf-8").toString());
+        return res.send(minimalJson);
+      }
+
+      res.setHeader("Content-Type", "application/json; charset=utf-8");
+      res.setHeader("Content-Length", Buffer.byteLength(fallbackJsonString, "utf-8").toString());
+      res.json(fallbackResponse);
+    }
     }
   } catch (err) {
     // AUTONOMOUS MODE: Never return 500 - always return a response

@@ -33,7 +33,7 @@ import { healthRouter, statusRouter } from "./routes/health.js";
 // BOOTSTRAP
 // =============================================================================
 
-const app = express();
+const app: express.Express = express();
 const PORT = parseInt(process.env.PORT ?? "3000", 10);
 
 // Load API keys from environment

@@ -17,8 +17,8 @@ RUN pnpm install --frozen-lockfile
 # Copy source
 COPY . .
 
-# Build TypeScript
-RUN pnpm run build
+# Build TypeScript (cloud config excludes legacy files)
+RUN npx tsc -p tsconfig.cloud.json
 
 # =============================================================================
 # Production stage
