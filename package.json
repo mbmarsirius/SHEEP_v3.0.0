@@ -35,7 +35,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/sheep-ai/core"
+    "url": "https://github.com/mbmarsirius/SHEEP_CORE_v3.0.0"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.74.0",

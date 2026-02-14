@@ -310,21 +310,78 @@ export function createSheepBot(config: SheepBotConfig): Bot<SheepContext> {
         ctx.session.history = ctx.session.history.slice(-maxHistory);
       }
 
-      // 2. Prefetch relevant memories (trimmed for speed)
+      // 2. Prefetch relevant memories (always includes core identity + keyword matches)
       let memoryContext = "";
       try {
-        const facts = db.findFacts({ activeOnly: true });
-        const words = userMessage.toLowerCase().split(/\s+/).filter((w) => w.length > 3);
-        const relevant = facts.filter((f) => {
-          const text = `${f.subject} ${f.predicate} ${f.object}`.toLowerCase();
-          return words.some((w) => text.includes(w));
-        }).slice(0, 8);
+        const allFacts = db.findFacts({ activeOnly: true });
+        const stats = db.getStats();
 
-        if (relevant.length > 0) {
-          memoryContext = "\n\n[SHEEP Memory - Known Facts]\n" +
-            relevant.map((f) => `- ${f.subject} ${f.predicate} ${f.object}`).join("\n");
+        // A. Always load CORE IDENTITY facts (highest confidence, about user/sheep)
+        const coreFacts = allFacts
+          .filter((f) => {
+            const subj = f.subject.toLowerCase();
+            return subj === "user" || subj === "mus" || subj === "mustafa" || subj === "sheep" || subj === "counting sheep";
+          })
+          .sort((a, b) => (b.confidence ?? 0) - (a.confidence ?? 0))
+          .slice(0, 15);
+
+        // B. Keyword matching for message-specific facts
+        const words = userMessage.toLowerCase().split(/\s+/).filter((w) => w.length > 3);
+        // Add Turkish→English memory trigger words for cross-language matching
+        const memoryTriggerMap: Record<string, string[]> = {
+          "hatırlıyor": ["remember", "memory", "recall"],
+          "hatırla": ["remember", "memory", "recall"],
+          "konuşma": ["conversation", "chat", "talk"],
+          "proje": ["project", "build", "develop"],
+          "çalışma": ["work", "project", "build"],
+          "görev": ["task", "mission", "goal"],
+          "plan": ["plan", "goal", "roadmap"],
+          "nerede": ["where", "location", "place"],
+          "kaldık": ["last", "previous", "continue"],
+          "kalmıştık": ["last", "previous", "continue"],
+          "sevdiğin": ["prefer", "like", "love", "favorite"],
+          "biliyorsun": ["know", "remember", "fact"],
+        };
+        const expandedWords = [...words];
+        for (const word of words) {
+          for (const [tr, enWords] of Object.entries(memoryTriggerMap)) {
+            if (word.includes(tr)) {
+              expandedWords.push(...enWords);
+            }
+          }
+        }
+        const uniqueWords = [...new Set(expandedWords)];
+
+        const keywordMatches = allFacts
+          .filter((f) => {
+            // Don't include facts already in coreFacts
+            if (coreFacts.some((cf) => cf.id === f.id)) return false;
+            const text = `${f.subject} ${f.predicate} ${f.object}`.toLowerCase();
+            return uniqueWords.some((w) => text.includes(w));
+          })
+          .sort((a, b) => (b.confidence ?? 0) - (a.confidence ?? 0))
+          .slice(0, 10);
+
+        // C. Build memory context - ALWAYS include something
+        const allRelevant = [...coreFacts, ...keywordMatches];
+
+        if (allRelevant.length > 0) {
+          memoryContext = `\n\n[SHEEP Memory - Known Facts (${stats.totalFacts} total facts, ${stats.totalEpisodes} episodes in database)]\n` +
+            allRelevant.map((f) => `- ${f.subject} ${f.predicate} ${f.object}`).join("\n");
         }
 
+        // D. Recent episodes for temporal context
+        try {
+          const recentEpisodes = db.findEpisodes({ limit: 3 });
+          if (recentEpisodes.length > 0) {
+            memoryContext += "\n\n[SHEEP Memory - Recent Conversations]\n" +
+              recentEpisodes.map((e) => `- ${e.summary} (${e.timestamp})`).join("\n");
+          }
+        } catch {
+          /* episodes might fail */
+        }
+
+        // E. Foresights/predictions
         try {
           const foresights = db.getActiveForesights("user");
           if (foresights.length > 0) {
@@ -334,6 +391,10 @@ export function createSheepBot(config: SheepBotConfig): Bot<SheepContext> {
         } catch {
           /* foresights table might not exist */
         }
+
+        // F. Memory stats summary (so LLM always knows memory exists)
+        memoryContext += `\n\n[Memory System Status: ${stats.totalFacts} facts, ${stats.totalEpisodes} episodes, ${stats.totalCausalLinks} causal links, ${stats.totalProcedures} procedures stored]`;
+
       } catch (err) {
         log.warn("Memory prefetch failed", { error: String(err) });
       }
@@ -374,7 +435,7 @@ You have a real memory system — not just this chat session. You genuinely lear
 When you have relevant memories, reference them naturally. Don't announce "According to my memory database..." — just use the knowledge like a friend would: "Didn't you say you were looking at Mac Studios last week?"
 
 ## What You Know Right Now
-${memoryContext || "No memories yet — this is a fresh start. Everything Mus tells you from now on will be learned and remembered."}
+${memoryContext || "Memory retrieval returned no specific matches for this query, but your memory system is active and storing data. If Mus asks what you remember, use /recall or check your core facts. Don't say your memory is empty — it may just not match the current keywords."}
 
 ## Guidelines
 - Never fabricate memories you don't have. If you don't remember something, say so honestly.

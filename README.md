@@ -98,4 +98,4 @@ Conversation → [LLM Extraction] → Facts + Causal Links + Episodes
 
 MIT — use it however you want.
 
-Built by [Marsirius AI Labs](https://github.com/sheep-ai)
+Built by [Marsirius AI Labs](https://github.com/mbmarsirius/SHEEP_CORE_v3.0.0)

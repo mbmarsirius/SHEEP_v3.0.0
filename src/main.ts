@@ -85,10 +85,10 @@ async function main(): Promise<void> {
   const db = new SheepDatabase(agentId);
   const stats = db.getStats();
   log.info("Database initialized", {
-    episodes: stats.episodes,
-    facts: stats.facts,
-    causalLinks: stats.causalLinks,
-    procedures: stats.procedures,
+    episodes: stats.totalEpisodes,
+    facts: stats.totalFacts,
+    causalLinks: stats.totalCausalLinks,
+    procedures: stats.totalProcedures,
   });
 
   // 5. Initialize embedding provider
